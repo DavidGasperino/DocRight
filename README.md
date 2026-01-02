@@ -1,9 +1,9 @@
 # LLM Callouts (Refactor)
 
-This folder contains a parallel refactor of the DocRight extension. The original extension in the repo remains unchanged.
+This repository contains the refactored DocRight extension.
 
-## Run the Refactor Extension
-- `code --extensionDevelopmentPath=refactor`
+## Run the Extension
+- `code --extensionDevelopmentPath=.`
 
 ## Commands
 - `DocRight Refactor: Start Session` (creates project if needed)

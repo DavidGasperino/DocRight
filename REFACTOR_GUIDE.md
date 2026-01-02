@@ -26,5 +26,5 @@
 5. Webview UI state management.
 
 ## Notes
-- Keep the existing extension intact until full parity is verified.
+- If you are migrating from another repo, keep a parallel branch until full parity is verified.
 - Use the settings file for new configuration parameters.
