@@ -1,0 +1,72 @@
+{
+  "name": "llm-callouts-refactor",
+  "displayName": "LLM Callouts (Refactor)",
+  "description": "Refactored DocRight extension with clean architecture and tests.",
+  "version": "0.0.1",
+  "publisher": "local",
+  "engines": {
+    "vscode": "^1.80.0"
+  },
+  "main": "./out/extension.js",
+  "activationEvents": [
+    "onCommand:docRightRefactor.startSession",
+    "onCommand:docRightRefactor.openLlmPanel",
+    "onCommand:docRightRefactor.openEditor",
+    "onCommand:docRightRefactor.setScopeSelection",
+    "onCommand:docRightRefactor.setScopeFull"
+  ],
+  "contributes": {
+    "commands": [
+      {
+        "command": "docRightRefactor.startSession",
+        "title": "DocRight Refactor: Start Session"
+      },
+      {
+        "command": "docRightRefactor.openLlmPanel",
+        "title": "DocRight Refactor: Open LLM Panel"
+      },
+      {
+        "command": "docRightRefactor.openEditor",
+        "title": "DocRight Refactor: Open Editor"
+      },
+      {
+        "command": "docRightRefactor.setScopeSelection",
+        "title": "DocRight Refactor: Set Scope to Selection"
+      },
+      {
+        "command": "docRightRefactor.setScopeFull",
+        "title": "DocRight Refactor: Set Scope to Full Document"
+      }
+    ]
+  },
+  "scripts": {
+    "build:docright": "node scripts/build-docright-editor.js",
+    "compile": "npm run build:docright && tsc -p ./",
+    "watch": "tsc -watch -p ./",
+    "lint": "eslint \"src/**/*.ts\"",
+    "test": "npm run compile && node ./out/test/runTest.js"
+  },
+  "devDependencies": {
+    "@lexical/history": "^0.11.1",
+    "@lexical/html": "^0.11.1",
+    "@lexical/link": "^0.11.1",
+    "@lexical/list": "^0.11.1",
+    "@lexical/mark": "^0.11.1",
+    "@lexical/rich-text": "^0.11.1",
+    "@lexical/selection": "^0.11.1",
+    "@lexical/table": "^0.11.1",
+    "@types/glob": "^8.1.0",
+    "@types/mocha": "^10.0.6",
+    "@types/node": "^20.12.7",
+    "@types/vscode": "^1.80.0",
+    "@typescript-eslint/eslint-plugin": "^7.8.0",
+    "@typescript-eslint/parser": "^7.8.0",
+    "@vscode/test-electron": "^2.3.9",
+    "esbuild": "^0.21.5",
+    "eslint": "^8.57.0",
+    "glob": "^10.3.12",
+    "lexical": "^0.11.1",
+    "mocha": "^10.3.0",
+    "typescript": "^5.4.5"
+  }
+}

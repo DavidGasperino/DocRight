@@ -1,0 +1,35 @@
+{
+  "llm": {
+    "defaultModel": "gpt-4o-mini",
+    "promptChunkSize": 8000,
+    "baseUrl": "https://api.openai.com/v1"
+  },
+  "roo": {
+    "defaultMode": "ask",
+    "extensionIds": [
+      "RooVeterinaryInc.roo-cline",
+      "rooveterinaryinc.roo-cline",
+      "RooVeterinaryInc.roo-code",
+      "rooveterinaryinc.roo-code"
+    ]
+  },
+  "ui": {
+    "autosaveDelayMs": 250,
+    "columns": {
+      "editor": 1,
+      "callouts": 2,
+      "llm": 3,
+      "roo": 4
+    }
+  },
+  "iterations": {
+    "autoSave": true
+  },
+  "prompts": {
+    "llmPreambleFile": "llm_preamble.txt",
+    "iterationPreambleFile": "iteration_preamble.txt"
+  },
+  "diagnostics": {
+    "debugLogging": true
+  }
+}
