@@ -58,6 +58,10 @@ export function getDocRightEditorHtml(options: DocRightEditorHtmlOptions): strin
       margin-right: 0;
       padding-right: 0;
     }
+    .toolbar-search {
+      margin-left: auto;
+      align-items: center;
+    }
     .toolbar-button {
       background: var(--vscode-button-secondaryBackground);
       color: var(--vscode-button-secondaryForeground);
@@ -75,6 +79,24 @@ export function getDocRightEditorHtml(options: DocRightEditorHtmlOptions): strin
       outline: 1px solid var(--vscode-focusBorder);
       outline-offset: 1px;
     }
+    .toolbar-search-input {
+      min-width: 180px;
+      background: var(--vscode-input-background);
+      color: var(--vscode-input-foreground);
+      border: 1px solid var(--vscode-input-border, transparent);
+      border-radius: 4px;
+      padding: 4px 6px;
+      font-size: 12px;
+    }
+    .toolbar-search-input::placeholder {
+      color: var(--vscode-input-placeholderForeground);
+    }
+    .toolbar-search-count {
+      font-size: 12px;
+      color: var(--vscode-descriptionForeground);
+      min-width: 56px;
+      text-align: right;
+    }
     .editor-container {
       flex: 1;
       padding: 24px 32px 12px 32px;
@@ -82,6 +104,12 @@ export function getDocRightEditorHtml(options: DocRightEditorHtmlOptions): strin
       position: relative;
     }
     .scope-overlay {
+      position: absolute;
+      inset: 0;
+      pointer-events: none;
+      z-index: 1;
+    }
+    .search-overlay {
       position: absolute;
       inset: 0;
       pointer-events: none;
@@ -93,6 +121,14 @@ export function getDocRightEditorHtml(options: DocRightEditorHtmlOptions): strin
       border: 2px solid rgba(90, 140, 255, 0.5);
       border-radius: 4px;
     }
+    .dr-search-highlight {
+      position: absolute;
+      background: rgba(255, 220, 0, 0.35);
+      border-radius: 2px;
+    }
+    .dr-search-highlight-current {
+      background: rgba(255, 200, 0, 0.6);
+    }
     .editor {
       min-height: 100%;
       outline: none;
@@ -100,7 +136,7 @@ export function getDocRightEditorHtml(options: DocRightEditorHtmlOptions): strin
       font-size: 15px;
       white-space: normal;
       position: relative;
-      z-index: 1;
+      z-index: 2;
     }
     .editor.is-empty::before {
       content: attr(data-placeholder);
@@ -249,9 +285,22 @@ export function getDocRightEditorHtml(options: DocRightEditorHtmlOptions): strin
       <button class="toolbar-button" data-action="link" title="Insert Link">Link</button>
       <button class="toolbar-button" data-action="table" title="Insert Table">Table</button>
     </div>
+    <div class="toolbar-group toolbar-search">
+      <input
+        id="docright-search"
+        class="toolbar-search-input"
+        type="search"
+        placeholder="Search document"
+        aria-label="Search document"
+      />
+      <button class="toolbar-button" id="docright-search-prev" title="Previous match">Prev</button>
+      <button class="toolbar-button" id="docright-search-next" title="Next match">Next</button>
+      <span class="toolbar-search-count" id="docright-search-count">0 / 0</span>
+    </div>
   </div>
   <div class="editor-container">
     <div id="scope-overlay" class="scope-overlay"></div>
+    <div id="search-overlay" class="search-overlay"></div>
     <div id="editor" class="editor" contenteditable="true" spellcheck="true" data-placeholder="Start writing..."></div>
   </div>
   <div id="context-menu" class="docright-menu" role="menu">

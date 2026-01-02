@@ -51,8 +51,19 @@ const statusElement = document.getElementById('status');
 const contextMenu = document.getElementById('context-menu');
 const editorContainer = document.querySelector('.editor-container');
 const scopeOverlay = document.getElementById('scope-overlay');
+const searchOverlay = document.getElementById('search-overlay');
+const searchInput = document.getElementById('docright-search');
+const searchPrevButton = document.getElementById('docright-search-prev');
+const searchNextButton = document.getElementById('docright-search-next');
+const searchCount = document.getElementById('docright-search-count');
 
 let scopeState = { mode: 'full', selection: null };
+let searchState = {
+  query: '',
+  matches: [],
+  index: 0,
+  textSnapshot: ''
+};
 
 function setStatus(message) {
   if (statusElement) {
@@ -141,6 +152,249 @@ if (!editorElement) {
   });
 
   const toolbar = document.getElementById('toolbar');
+
+  function normalizeSearchQuery(value) {
+    return value.trim();
+  }
+
+  function updateSearchUI() {
+    const total = searchState.matches.length;
+    const current = total === 0 ? 0 : searchState.index + 1;
+    if (searchCount) {
+      searchCount.textContent = `${current} / ${total}`;
+    }
+    if (searchPrevButton) {
+      searchPrevButton.disabled = total === 0;
+    }
+    if (searchNextButton) {
+      searchNextButton.disabled = total === 0;
+    }
+  }
+
+  function shouldPreserveSearchFocus() {
+    if (!searchInput) {
+      return false;
+    }
+    const active = document.activeElement;
+    return active === searchInput || active === searchPrevButton || active === searchNextButton;
+  }
+
+  function selectSearchMatch(index, options = { preserveFocus: false }) {
+    const match = searchState.matches[index];
+    if (!match) {
+      return;
+    }
+    editor.update(() => {
+      const range = $createRangeSelection();
+      range.anchor.set(match.key, match.start, 'text');
+      range.focus.set(match.key, match.end, 'text');
+      $setSelection(range);
+    });
+    if (options.preserveFocus && shouldPreserveSearchFocus()) {
+      setTimeout(() => {
+        searchInput.focus({ preventScroll: true });
+      }, 0);
+    } else {
+      editor.focus();
+    }
+    setTimeout(() => {
+      const element = editor.getElementByKey(match.key);
+      if (element && element.scrollIntoView) {
+        element.scrollIntoView({ block: 'center' });
+      }
+    }, 0);
+  }
+
+  let searchHighlightScheduled = false;
+
+  function clearSearchOverlay() {
+    if (searchOverlay) {
+      searchOverlay.innerHTML = '';
+    }
+  }
+
+  function buildDomRangeFromMatch(match) {
+    const start = resolveDomPoint({ key: match.key, offset: match.start, type: 'text' });
+    const end = resolveDomPoint({ key: match.key, offset: match.end, type: 'text' });
+    if (!start || !end) {
+      return null;
+    }
+    const range = document.createRange();
+    range.setStart(start.node, start.offset);
+    range.setEnd(end.node, end.offset);
+    if (range.collapsed) {
+      return null;
+    }
+    return range;
+  }
+
+  function updateSearchOverlay() {
+    if (!searchOverlay || !editorContainer) {
+      return;
+    }
+    if (!searchState.query || searchState.matches.length === 0) {
+      clearSearchOverlay();
+      return;
+    }
+
+    const rects = [];
+    editor.getEditorState().read(() => {
+      searchState.matches.forEach((match, index) => {
+        const range = buildDomRangeFromMatch(match);
+        if (!range) {
+          return;
+        }
+        const clientRects = Array.from(range.getClientRects());
+        clientRects.forEach((rect) => {
+          if (rect.width <= 0 || rect.height <= 0) {
+            return;
+          }
+          rects.push({
+            rect,
+            isCurrent: index === searchState.index
+          });
+        });
+      });
+    });
+
+    clearSearchOverlay();
+    if (rects.length === 0) {
+      return;
+    }
+
+    const containerRect = editorContainer.getBoundingClientRect();
+    const scrollLeft = editorContainer.scrollLeft;
+    const scrollTop = editorContainer.scrollTop;
+    rects.forEach(({ rect, isCurrent }) => {
+      const highlight = document.createElement('div');
+      highlight.className = 'dr-search-highlight' + (isCurrent ? ' dr-search-highlight-current' : '');
+      highlight.style.left = rect.left - containerRect.left + scrollLeft + 'px';
+      highlight.style.top = rect.top - containerRect.top + scrollTop + 'px';
+      highlight.style.width = rect.width + 'px';
+      highlight.style.height = rect.height + 'px';
+      searchOverlay.appendChild(highlight);
+    });
+  }
+
+  function scheduleSearchOverlayUpdate() {
+    if (searchHighlightScheduled) {
+      return;
+    }
+    searchHighlightScheduled = true;
+    requestAnimationFrame(() => {
+      searchHighlightScheduled = false;
+      updateSearchOverlay();
+    });
+  }
+
+  function updateSearchMatches(nextQuery, options = { select: true, preserveFocus: false }) {
+    const normalized = normalizeSearchQuery(nextQuery);
+    if (normalized.length === 0) {
+      searchState = {
+        query: '',
+        matches: [],
+        index: 0,
+        textSnapshot: ''
+      };
+      updateSearchUI();
+      clearSearchOverlay();
+      return;
+    }
+
+    let matches = [];
+    let textSnapshot = '';
+    editor.getEditorState().read(() => {
+      const root = $getRoot();
+      textSnapshot = root.getTextContent();
+      const loweredQuery = normalized.toLowerCase();
+      const nodes = root.getAllTextNodes();
+      nodes.forEach((node) => {
+        const text = node.getTextContent();
+        if (!text) {
+          return;
+        }
+        const loweredText = text.toLowerCase();
+        let startIndex = 0;
+        while (true) {
+          const index = loweredText.indexOf(loweredQuery, startIndex);
+          if (index === -1) {
+            break;
+          }
+          matches.push({
+            key: node.getKey(),
+            start: index,
+            end: index + normalized.length
+          });
+          startIndex = index + normalized.length;
+        }
+      });
+    });
+
+    let index = searchState.index;
+    if (normalized !== searchState.query) {
+      index = 0;
+    }
+    if (matches.length === 0) {
+      index = 0;
+    } else if (index >= matches.length) {
+      index = 0;
+    }
+    searchState = {
+      query: normalized,
+      matches,
+      index,
+      textSnapshot
+    };
+    updateSearchUI();
+    scheduleSearchOverlayUpdate();
+    if (options.select && matches.length > 0) {
+      selectSearchMatch(index, { preserveFocus: options.preserveFocus });
+    }
+  }
+
+  function stepSearchMatch(delta, preserveFocus = false) {
+    const total = searchState.matches.length;
+    if (total === 0) {
+      return;
+    }
+    searchState.index = (searchState.index + delta + total) % total;
+    updateSearchUI();
+    scheduleSearchOverlayUpdate();
+    selectSearchMatch(searchState.index, { preserveFocus });
+  }
+
+  if (searchInput) {
+    searchInput.addEventListener('input', () => {
+      updateSearchMatches(searchInput.value, { select: true, preserveFocus: true });
+    });
+    searchInput.addEventListener('keydown', (event) => {
+      if (event.key === 'Enter') {
+        event.preventDefault();
+        if (event.shiftKey) {
+          stepSearchMatch(-1, true);
+        } else {
+          stepSearchMatch(1, true);
+        }
+      }
+      if (event.key === 'Escape') {
+        searchInput.value = '';
+        updateSearchMatches('', { select: false });
+        editor.focus();
+      }
+    });
+  }
+
+  if (searchPrevButton) {
+    searchPrevButton.addEventListener('click', () => {
+      stepSearchMatch(-1, true);
+    });
+  }
+
+  if (searchNextButton) {
+    searchNextButton.addEventListener('click', () => {
+      stepSearchMatch(1, true);
+    });
+  }
 
   function setBlocksType(createNode) {
     if (shouldBlockEditing()) {
@@ -609,11 +863,13 @@ if (!editorElement) {
   if (editorContainer) {
     editorContainer.addEventListener('scroll', () => {
       scheduleScopeOverlayUpdate();
+      scheduleSearchOverlayUpdate();
     });
   }
 
   window.addEventListener('resize', () => {
     scheduleScopeOverlayUpdate();
+    scheduleSearchOverlayUpdate();
   });
 
   function findMarkNodesById(node, id, results) {
@@ -861,6 +1117,15 @@ if (!editorElement) {
     vscode.postMessage({ type: 'docright.update', state: json });
     updateEmptyState();
     scheduleScopeOverlayUpdate();
+    if (searchState.query) {
+      let nextSnapshot = '';
+      editorState.read(() => {
+        nextSnapshot = $getRoot().getTextContent();
+      });
+      if (nextSnapshot !== searchState.textSnapshot) {
+        updateSearchMatches(searchState.query, { select: false });
+      }
+    }
   });
 
   window.addEventListener('message', (event) => {
@@ -949,5 +1214,6 @@ if (!editorElement) {
   });
 
   updateEmptyState();
+  updateSearchUI();
   vscode.postMessage({ type: 'docright.ready' });
 }

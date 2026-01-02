@@ -39,7 +39,7 @@ export function activate(context: vscode.ExtensionContext): RefactorApi {
   const startSession = vscode.commands.registerCommand('docRightRefactor.startSession', async () => {
     const root = getWorkspaceRoot();
     if (!root) {
-      void vscode.window.showErrorMessage('Open a workspace folder to start DocRight Refactor.');
+      void vscode.window.showErrorMessage('Open a workspace folder to start DocRight.');
       return;
     }
 
@@ -52,7 +52,7 @@ export function activate(context: vscode.ExtensionContext): RefactorApi {
         return;
       }
       const confirmed = await vscode.window.showInformationMessage(
-        `Create a DocRight Refactor project in ${root}?`,
+        `Create a DocRight project in ${root}?`,
         { modal: true },
         'Create'
       );
@@ -64,7 +64,7 @@ export function activate(context: vscode.ExtensionContext): RefactorApi {
         await initializeDocRightProject(root, settings);
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
-        void vscode.window.showErrorMessage(`Failed to create DocRight Refactor project: ${message}`);
+        void vscode.window.showErrorMessage(`Failed to create DocRight project: ${message}`);
         return;
       }
 
@@ -72,7 +72,7 @@ export function activate(context: vscode.ExtensionContext): RefactorApi {
       if (editorHost) {
         await editorHost.open(root);
       }
-      void vscode.window.showInformationMessage('DocRight Refactor project created.');
+      void vscode.window.showInformationMessage('DocRight project created.');
       return;
     }
 
@@ -80,7 +80,7 @@ export function activate(context: vscode.ExtensionContext): RefactorApi {
     if (editorHost) {
       await editorHost.open(root);
     }
-    const message = `DocRight Refactor settings ready (model: ${settings.llm.defaultModel}).`;
+    const message = `DocRight settings ready (model: ${settings.llm.defaultModel}).`;
     void vscode.window.showInformationMessage(message);
   });
 
@@ -118,7 +118,7 @@ export function activate(context: vscode.ExtensionContext): RefactorApi {
 
     const config = await loadDocRightConfig(root);
     if (!config) {
-      void vscode.window.showErrorMessage('No DocRight Refactor project found in this workspace.');
+      void vscode.window.showErrorMessage('No DocRight project found in this workspace.');
       return;
     }
 

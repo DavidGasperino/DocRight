@@ -6,11 +6,11 @@ This repository contains the refactored DocRight extension.
 - `code --extensionDevelopmentPath=.`
 
 ## Commands
-- `DocRight Refactor: Start Session` (creates project if needed)
-- `DocRight Refactor: Open Editor`
-- `DocRight Refactor: Open LLM Panel`
-- `DocRight Refactor: Set Scope to Selection`
-- `DocRight Refactor: Set Scope to Full Document`
+- `DocRight: Start Session` (creates project if needed)
+- `DocRight: Open Editor`
+- `DocRight: Open LLM Panel`
+- `DocRight: Set Scope to Selection`
+- `DocRight: Set Scope to Full Document`
 
 ## Scripts
 - Build: `npm run compile` (includes webview bundle)

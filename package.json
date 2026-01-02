@@ -19,23 +19,23 @@
     "commands": [
       {
         "command": "docRightRefactor.startSession",
-        "title": "DocRight Refactor: Start Session"
+        "title": "DocRight: Start Session"
       },
       {
         "command": "docRightRefactor.openLlmPanel",
-        "title": "DocRight Refactor: Open LLM Panel"
+        "title": "DocRight: Open LLM Panel"
       },
       {
         "command": "docRightRefactor.openEditor",
-        "title": "DocRight Refactor: Open Editor"
+        "title": "DocRight: Open Editor"
       },
       {
         "command": "docRightRefactor.setScopeSelection",
-        "title": "DocRight Refactor: Set Scope to Selection"
+        "title": "DocRight: Set Scope to Selection"
       },
       {
         "command": "docRightRefactor.setScopeFull",
-        "title": "DocRight Refactor: Set Scope to Full Document"
+        "title": "DocRight: Set Scope to Full Document"
       }
     ]
   },
