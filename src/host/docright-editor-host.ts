@@ -48,6 +48,7 @@ export class DocRightEditorHost {
   private nextInlineId = 1;
   private nextOverallId = 1;
   private editorActive = false;
+  private calloutsChangedHandler: (() => void) | null = null;
 
   constructor(extensionUri: vscode.Uri, settings: DocRightSettings, logger: Logger) {
     this.extensionUri = extensionUri;
@@ -57,6 +58,168 @@ export class DocRightEditorHost {
 
   updateSettings(settings: DocRightSettings): void {
     this.settings = settings;
+  }
+
+  setCalloutsChangedHandler(handler: (() => void) | null): void {
+    this.calloutsChangedHandler = handler;
+  }
+
+  async flushPendingSave(): Promise<void> {
+    await this.flushSave();
+  }
+
+  async reloadFromDisk(): Promise<void> {
+    if (!this.root) {
+      return;
+    }
+    await this.loadProjectState(this.root);
+    if (this.panel) {
+      await this.postDocRightState();
+      this.postDocRightScope();
+    }
+  }
+
+  async selectInlineCallout(id: string | null): Promise<void> {
+    if (!this.root) {
+      return;
+    }
+    if (!this.calloutsState) {
+      this.calloutsState = await loadDocRightCallouts(this.root);
+    }
+    const nextId = this.calloutsState.inline.some((item) => item.id === id) ? id : null;
+    this.calloutsState.selectedInlineId = nextId;
+    this.postMessage({ type: 'docright.selectInlineCallout', id: nextId });
+    this.calloutsChangedHandler?.();
+  }
+
+  async selectOverallCallout(id: string | null): Promise<void> {
+    if (!this.root) {
+      return;
+    }
+    if (!this.calloutsState) {
+      this.calloutsState = await loadDocRightCallouts(this.root);
+    }
+    const nextId = this.calloutsState.overall.some((item) => item.id === id) ? id : null;
+    this.calloutsState.selectedOverallId = nextId;
+    this.calloutsChangedHandler?.();
+  }
+
+  async updateInlineInstruction(id: string, instruction: string): Promise<void> {
+    if (!this.root) {
+      return;
+    }
+    if (!this.calloutsState) {
+      this.calloutsState = await loadDocRightCallouts(this.root);
+    }
+    const target = this.calloutsState.inline.find((item) => item.id === id);
+    if (!target) {
+      return;
+    }
+    target.instruction = instruction.trim();
+    await saveDocRightCallouts(this.root, this.calloutsState);
+    this.calloutsChangedHandler?.();
+  }
+
+  async updateOverallInstruction(id: string, instruction: string): Promise<void> {
+    if (!this.root) {
+      return;
+    }
+    if (!this.calloutsState) {
+      this.calloutsState = await loadDocRightCallouts(this.root);
+    }
+    const target = this.calloutsState.overall.find((item) => item.id === id);
+    if (!target) {
+      return;
+    }
+    target.instruction = instruction.trim();
+    await saveDocRightCallouts(this.root, this.calloutsState);
+    this.calloutsChangedHandler?.();
+  }
+
+  async removeInlineCallout(id: string): Promise<void> {
+    if (!this.root) {
+      return;
+    }
+    if (!this.calloutsState) {
+      this.calloutsState = await loadDocRightCallouts(this.root);
+    }
+    const nextInline = this.calloutsState.inline.filter((item) => item.id !== id);
+    if (nextInline.length === this.calloutsState.inline.length) {
+      return;
+    }
+    this.calloutsState.inline = nextInline;
+    if (this.calloutsState.selectedInlineId === id) {
+      this.calloutsState.selectedInlineId = null;
+    }
+    this.updateCalloutCounters();
+    await saveDocRightCallouts(this.root, this.calloutsState);
+    this.postMessage({ type: 'docright.removeInlineCallout', id });
+    this.calloutsChangedHandler?.();
+  }
+
+  async removeOverallCallout(id: string): Promise<void> {
+    if (!this.root) {
+      return;
+    }
+    if (!this.calloutsState) {
+      this.calloutsState = await loadDocRightCallouts(this.root);
+    }
+    const nextOverall = this.calloutsState.overall.filter((item) => item.id !== id);
+    if (nextOverall.length === this.calloutsState.overall.length) {
+      return;
+    }
+    this.calloutsState.overall = nextOverall;
+    if (this.calloutsState.selectedOverallId === id) {
+      this.calloutsState.selectedOverallId = null;
+    }
+    this.updateCalloutCounters();
+    await saveDocRightCallouts(this.root, this.calloutsState);
+    this.calloutsChangedHandler?.();
+  }
+
+  async addOverallCalloutFromPanel(): Promise<void> {
+    if (!this.root) {
+      return;
+    }
+    const instruction = await vscode.window.showInputBox({
+      title: 'Overall Callout',
+      prompt: 'Describe the overall change for this document',
+      placeHolder: 'e.g. tighten tone, clarify structure, fix inconsistencies'
+    });
+    if (instruction === undefined) {
+      return;
+    }
+    const trimmed = instruction.trim();
+    if (!trimmed) {
+      void vscode.window.showErrorMessage('Instruction cannot be empty.');
+      return;
+    }
+    if (!this.calloutsState) {
+      this.calloutsState = await loadDocRightCallouts(this.root);
+    }
+    const id = `overall-${String(this.nextOverallId++)}`;
+    const item: DocRightOverallCallout = { id, instruction: trimmed };
+    this.calloutsState.overall.push(item);
+    this.calloutsState.selectedOverallId = id;
+    await saveDocRightCallouts(this.root, this.calloutsState);
+    this.calloutsChangedHandler?.();
+  }
+
+  async clearCallouts(): Promise<void> {
+    if (!this.root) {
+      return;
+    }
+    if (!this.calloutsState) {
+      this.calloutsState = await loadDocRightCallouts(this.root);
+    }
+    this.calloutsState.inline = [];
+    this.calloutsState.overall = [];
+    this.calloutsState.selectedInlineId = null;
+    this.calloutsState.selectedOverallId = null;
+    this.updateCalloutCounters();
+    await saveDocRightCallouts(this.root, this.calloutsState);
+    this.postMessage({ type: 'docright.clearInlineCallouts' });
+    this.calloutsChangedHandler?.();
   }
 
   isOpenForRoot(root: string): boolean {
@@ -185,6 +348,14 @@ export class DocRightEditorHost {
     const overall = this.calloutsState?.overall ?? [];
     this.nextInlineId = nextIdForPrefix(inline, 'inline');
     this.nextOverallId = nextIdForPrefix(overall, 'overall');
+  }
+
+  async reloadCallouts(): Promise<void> {
+    if (!this.root) {
+      return;
+    }
+    this.calloutsState = await loadDocRightCallouts(this.root);
+    this.updateCalloutCounters();
   }
 
   private async postDocRightState(): Promise<void> {
@@ -348,6 +519,7 @@ export class DocRightEditorHost {
       return;
     }
     this.calloutsState.selectedInlineId = nextId;
+    this.calloutsChangedHandler?.();
   }
 
   private async handleInlineCalloutRequest(selection: DocRightSelectionPayload): Promise<void> {
@@ -394,6 +566,7 @@ export class DocRightEditorHost {
     this.calloutsState.inline.push(item);
     this.calloutsState.selectedInlineId = id;
     await saveDocRightCallouts(this.root, this.calloutsState);
+    this.calloutsChangedHandler?.();
 
     this.postMessage({ type: 'docright.applyInlineCallout', id, selection });
   }
@@ -428,6 +601,7 @@ export class DocRightEditorHost {
     this.calloutsState.overall.push(item);
     this.calloutsState.selectedOverallId = id;
     await saveDocRightCallouts(this.root, this.calloutsState);
+    this.calloutsChangedHandler?.();
   }
 }
 

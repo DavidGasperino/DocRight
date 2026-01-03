@@ -9,7 +9,7 @@
   },
   "main": "./out/extension.js",
   "activationEvents": [
-    "onCommand:docRightRefactor.startSession",
+    "onCommand:docRight.startSession",
     "onCommand:docRightRefactor.openLlmPanel",
     "onCommand:docRightRefactor.openEditor",
     "onCommand:docRightRefactor.setScopeSelection",
@@ -18,7 +18,7 @@
   "contributes": {
     "commands": [
       {
-        "command": "docRightRefactor.startSession",
+        "command": "docRight.startSession",
         "title": "DocRight: Start Session"
       },
       {

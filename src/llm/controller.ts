@@ -59,6 +59,7 @@ export class LlmController {
 
   setPrompt(prompt: string): void {
     this.state.prompt = String(prompt || '');
+    this.state.response = '';
     this.state.status = 'Prompt ready';
     this.state.canApply = false;
     this.state.isRunning = false;
@@ -73,6 +74,14 @@ export class LlmController {
       lastPromptId: this.lastPromptId,
       lastPromptLength: this.lastPromptLength
     };
+  }
+
+  getStateSnapshot(): LlmState {
+    return { ...this.state };
+  }
+
+  updateState(patch: Partial<LlmState>): void {
+    this.state = { ...this.state, ...patch };
   }
 
   async postState(): Promise<void> {
