@@ -6,6 +6,7 @@ export type DocRightContextItem = {
   name: string;
   description?: string;
   path: string;
+  active?: boolean;
 };
 
 export type DocRightContextsState = {
@@ -20,11 +21,23 @@ export async function loadDocRightContexts(root: string): Promise<DocRightContex
   const contextsPath = getDocRightContextsPath(root);
   const data = await readJsonFile<DocRightContextsState>(contextsPath, defaultState);
   const items = Array.isArray(data.items) ? data.items : [];
-  return { items };
+  return {
+    items: items.map((item) => ({
+      ...item,
+      active: Boolean(item.active)
+    }))
+  };
 }
 
 export async function saveDocRightContexts(root: string, state: DocRightContextsState): Promise<void> {
   const contextsPath = getDocRightContextsPath(root);
-  const payload: DocRightContextsState = { items: Array.isArray(state.items) ? state.items : [] };
+  const payload: DocRightContextsState = {
+    items: Array.isArray(state.items)
+      ? state.items.map((item) => ({
+          ...item,
+          active: Boolean(item.active)
+        }))
+      : []
+  };
   await writeJsonFile(contextsPath, payload);
 }

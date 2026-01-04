@@ -10,6 +10,7 @@ import {
   getDocRightLlmDir,
   getDocRightLlmLastRunPath,
   getDocRightLlmSessionPath,
+  getDocRightRooResponsePath,
   getDocRightScopePath
 } from './docright-paths';
 import { type DocRightScopeState } from '../core/scope';
@@ -27,7 +28,15 @@ export type DocRightIterationMetadata = {
   reason?: string;
   model?: string | null;
   scope?: DocRightScopeState | null;
+  parentId?: string | null;
+  summaryBullets?: string[];
 };
+
+export type DocRightIterationState = {
+  headId: string | null;
+};
+
+const ITERATION_STATE_FILE = 'state.json';
 
 export async function listDocRightIterations(root: string): Promise<DocRightIteration[]> {
   const iterationsDir = getDocRightIterationsDir(root);
@@ -77,6 +86,100 @@ export async function listDocRightIterations(root: string): Promise<DocRightIter
   return iterations;
 }
 
+export async function loadDocRightIterationState(root: string): Promise<DocRightIterationState> {
+  const iterationsDir = getDocRightIterationsDir(root);
+  const statePath = path.join(iterationsDir, ITERATION_STATE_FILE);
+  if (!fs.existsSync(statePath)) {
+    return { headId: null };
+  }
+  try {
+    const raw = await fs.promises.readFile(statePath, 'utf8');
+    const parsed = JSON.parse(raw);
+    const headId = typeof parsed.headId === 'string' ? parsed.headId : null;
+    return { headId };
+  } catch (error) {
+    return { headId: null };
+  }
+}
+
+export async function saveDocRightIterationState(root: string, state: DocRightIterationState): Promise<void> {
+  const iterationsDir = getDocRightIterationsDir(root);
+  await ensureDir(iterationsDir);
+  const statePath = path.join(iterationsDir, ITERATION_STATE_FILE);
+  try {
+    await fs.promises.writeFile(
+      statePath,
+      ensureTrailingNewline(JSON.stringify(state, null, 2)),
+      'utf8'
+    );
+  } catch (error) {
+    // Ignore state write failures.
+  }
+}
+
+export async function loadDocRightIterationMetadata(
+  root: string,
+  iterationId: string
+): Promise<DocRightIterationMetadata | null> {
+  const iterationsDir = getDocRightIterationsDir(root);
+  const metadataPath = path.join(iterationsDir, iterationId, 'metadata.json');
+  if (!fs.existsSync(metadataPath)) {
+    return null;
+  }
+  try {
+    const raw = await fs.promises.readFile(metadataPath, 'utf8');
+    const parsed = JSON.parse(raw);
+    if (!parsed || typeof parsed !== 'object') {
+      return null;
+    }
+    const createdAt = typeof parsed.createdAt === 'string' ? parsed.createdAt : '';
+    if (!createdAt) {
+      return null;
+    }
+    const summaryBullets = Array.isArray(parsed.summaryBullets)
+      ? parsed.summaryBullets.filter((entry: unknown) => typeof entry === 'string')
+      : [];
+    return {
+      id: iterationId,
+      createdAt,
+      note: typeof parsed.note === 'string' ? parsed.note : '',
+      reason: typeof parsed.reason === 'string' ? parsed.reason : '',
+      model: typeof parsed.model === 'string' ? parsed.model : null,
+      scope: parsed.scope ?? null,
+      parentId: typeof parsed.parentId === 'string' ? parsed.parentId : null,
+      summaryBullets
+    };
+  } catch (error) {
+    return null;
+  }
+}
+
+export async function listDocRightIterationMetadata(root: string): Promise<DocRightIterationMetadata[]> {
+  const iterationsDir = getDocRightIterationsDir(root);
+  if (!fs.existsSync(iterationsDir)) {
+    return [];
+  }
+  let entries: fs.Dirent[] = [];
+  try {
+    entries = await fs.promises.readdir(iterationsDir, { withFileTypes: true });
+  } catch (error) {
+    return [];
+  }
+
+  const items: DocRightIterationMetadata[] = [];
+  for (const entry of entries) {
+    if (!entry.isDirectory() || !/^\d+$/.test(entry.name)) {
+      continue;
+    }
+    const metadata = await loadDocRightIterationMetadata(root, entry.name);
+    if (metadata) {
+      items.push(metadata);
+    }
+  }
+  items.sort((a, b) => a.id.localeCompare(b.id));
+  return items;
+}
+
 export async function saveDocRightIteration(
   root: string,
   options: {
@@ -84,6 +187,8 @@ export async function saveDocRightIteration(
     scope?: DocRightScopeState | null;
     note?: string;
     reason?: string;
+    parentId?: string | null;
+    summaryBullets?: string[];
   } = {}
 ): Promise<DocRightIteration> {
   const iterationsDir = getDocRightIterationsDir(root);
@@ -120,7 +225,8 @@ export async function saveDocRightIteration(
     { from: getDocRightContextsPath(root), to: path.join(snapshotDir, 'contexts.json') },
     { from: getDocRightScopePath(root), to: path.join(snapshotDir, 'scope.json') },
     { from: getDocRightLlmSessionPath(root), to: path.join(llmSnapshotDir, 'session.json') },
-    { from: getDocRightLlmLastRunPath(root), to: path.join(llmSnapshotDir, 'last_run.json') }
+    { from: getDocRightLlmLastRunPath(root), to: path.join(llmSnapshotDir, 'last_run.json') },
+    { from: getDocRightRooResponsePath(root), to: path.join(llmSnapshotDir, 'roo_response.html') }
   ];
 
   for (const entry of filesToCopy) {
@@ -134,13 +240,21 @@ export async function saveDocRightIteration(
   }
 
   const createdAt = new Date().toISOString();
+  const summaryBullets = Array.isArray(options.summaryBullets)
+    ? options.summaryBullets.map((entry) => String(entry || '').trim()).filter((entry) => entry.length > 0)
+    : [];
+  const note = options.note || summaryBullets[0] || '';
+  const state = await loadDocRightIterationState(root);
+  const parentId = options.parentId ?? state.headId ?? null;
   const metadata: DocRightIterationMetadata = {
     id: nextId,
     createdAt,
-    note: options.note ?? '',
+    note,
     reason: options.reason ?? '',
     model: options.model ?? null,
-    scope: options.scope ?? null
+    scope: options.scope ?? null,
+    parentId,
+    summaryBullets
   };
 
   try {
@@ -152,6 +266,8 @@ export async function saveDocRightIteration(
   } catch (error) {
     // Ignore metadata write failures.
   }
+
+  await saveDocRightIterationState(root, { headId: nextId });
 
   let label = `#${nextId} - ${createdAt}`;
   if (metadata.note) {
@@ -176,7 +292,8 @@ export async function restoreDocRightIteration(root: string, iterationId: string
     { from: path.join(snapshotDir, 'contexts.json'), to: getDocRightContextsPath(root) },
     { from: path.join(snapshotDir, 'scope.json'), to: getDocRightScopePath(root) },
     { from: path.join(snapshotDir, 'llm', 'session.json'), to: getDocRightLlmSessionPath(root) },
-    { from: path.join(snapshotDir, 'llm', 'last_run.json'), to: getDocRightLlmLastRunPath(root) }
+    { from: path.join(snapshotDir, 'llm', 'last_run.json'), to: getDocRightLlmLastRunPath(root) },
+    { from: path.join(snapshotDir, 'llm', 'roo_response.html'), to: getDocRightRooResponsePath(root) }
   ];
 
   for (const entry of filesToRestore) {
@@ -188,4 +305,6 @@ export async function restoreDocRightIteration(root: string, iterationId: string
       // Ignore copy failures; restore best-effort.
     }
   }
+
+  await saveDocRightIterationState(root, { headId: iterationId });
 }

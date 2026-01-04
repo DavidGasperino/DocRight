@@ -17,6 +17,7 @@ export async function buildPromptPreview(
 ): Promise<string> {
   const scope = await loadDocRightScope(root);
   const contexts = await loadDocRightContexts(root);
+  const activeContexts = contexts.items.filter((item) => item.active);
   const callouts = await loadDocRightCallouts(root);
 
   const llmPreamble = await readDocRightPrompt(root, settings.prompts.llmPreambleFile, '');
@@ -26,7 +27,7 @@ export async function buildPromptPreview(
   const xml = buildDocRightXml(
     html,
     callouts.overall.map((item) => ({ instruction: item.instruction })),
-    contexts.items.map((item) => ({
+    activeContexts.map((item) => ({
       name: item.name,
       description: item.description,
       path: item.path

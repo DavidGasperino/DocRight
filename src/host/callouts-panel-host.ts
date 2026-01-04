@@ -19,6 +19,8 @@ import { type LlmController } from '../llm/controller';
 import { type Logger } from './logger';
 import { DocRightEditorHost } from './docright-editor-host';
 import { type LlmPanelHost } from './llm-panel-host';
+import { promptSummaryBullets } from './iteration-summary';
+import { DocRightTimelinePanelHost } from './timeline-panel-host';
 
 export class DocRightCalloutsHost {
   private panel: vscode.WebviewPanel | null = null;
@@ -29,17 +31,20 @@ export class DocRightCalloutsHost {
   private llmPanelHost: LlmPanelHost;
   private llmController: LlmController;
   private settings: DocRightSettings;
+  private timelinePanelHost: DocRightTimelinePanelHost;
   private selectedContextId: string | null = null;
   private selectedInlineId: string | null = null;
   private selectedOverallId: string | null = null;
   private lastInstructionTarget: 'inline' | 'overall' | null = null;
   private lastInstructionWebview: vscode.Webview | null = null;
+  private refreshTimeline: (() => void) | null = null;
 
   constructor(
     extensionUri: vscode.Uri,
     editorHost: DocRightEditorHost,
     llmPanelHost: LlmPanelHost,
     llmController: LlmController,
+    timelinePanelHost: DocRightTimelinePanelHost,
     settings: DocRightSettings,
     logger: Logger
   ) {
@@ -47,12 +52,17 @@ export class DocRightCalloutsHost {
     this.editorHost = editorHost;
     this.llmPanelHost = llmPanelHost;
     this.llmController = llmController;
+    this.timelinePanelHost = timelinePanelHost;
     this.settings = settings;
     this.logger = logger;
   }
 
   updateSettings(settings: DocRightSettings): void {
     this.settings = settings;
+  }
+
+  setTimelineRefreshHandler(handler: (() => void) | null): void {
+    this.refreshTimeline = handler;
   }
 
   async open(root: string, options?: { viewColumn?: vscode.ViewColumn; preserveFocus?: boolean }): Promise<void> {
@@ -152,6 +162,9 @@ export class DocRightCalloutsHost {
       case 'addContextFile':
         await this.addContextFile();
         break;
+      case 'toggleContextActive':
+        await this.toggleContextActive(message.id, message.active);
+        break;
       case 'setScopeSelection':
         await this.editorHost.setScopeToSelection();
         break;
@@ -163,6 +176,9 @@ export class DocRightCalloutsHost {
         break;
       case 'saveIteration':
         await this.saveIteration();
+        break;
+      case 'openTimeline':
+        await this.openTimelinePanel();
         break;
       case 'restoreIteration':
         await this.restoreIteration(message.id);
@@ -180,6 +196,13 @@ export class DocRightCalloutsHost {
     }
   }
 
+  private async openTimelinePanel(): Promise<void> {
+    if (!this.root) {
+      return;
+    }
+    await this.timelinePanelHost.open(this.root, { viewColumn: vscode.ViewColumn.Beside, preserveFocus: false });
+  }
+
   private async buildState(root: string): Promise<CalloutsStateMessage> {
     const contextsState = await loadDocRightContexts(root);
     const contexts = contextsState.items.map((item, index) => ({
@@ -187,7 +210,8 @@ export class DocRightCalloutsHost {
       displayNumber: index + 1,
       name: item.name,
       description: item.description,
-      path: item.path
+      path: item.path,
+      active: Boolean(item.active)
     }));
 
     const selectedContextId =
@@ -337,7 +361,8 @@ export class DocRightCalloutsHost {
       id: `context-${this.nextContextId(contextsState.items)}`,
       name: trimmedName,
       description: description.trim(),
-      path: fileUri.fsPath
+      path: fileUri.fsPath,
+      active: false
     };
 
     contextsState.items.push(item);
@@ -388,7 +413,24 @@ export class DocRightCalloutsHost {
     if (!item) {
       return;
     }
+    if (!item.active) {
+      void vscode.window.showInformationMessage('Enable the context checkbox to insert it.');
+      return;
+    }
     this.insertContextReferenceToken(item.name);
+  }
+
+  private async toggleContextActive(id: string, active: boolean): Promise<void> {
+    if (!this.root) {
+      return;
+    }
+    const contextsState = await loadDocRightContexts(this.root);
+    const item = contextsState.items.find((entry) => entry.id === id);
+    if (!item) {
+      return;
+    }
+    item.active = Boolean(active);
+    await saveDocRightContexts(this.root, contextsState);
   }
 
   private insertContextReferenceToken(token: string): void {
@@ -413,6 +455,11 @@ export class DocRightCalloutsHost {
     if (!this.root) {
       return;
     }
+    const callouts = await loadDocRightCallouts(this.root);
+    if (callouts.inline.length === 0 && callouts.overall.length === 0) {
+      void vscode.window.showInformationMessage('Add at least one callout before generating a prompt.');
+      return;
+    }
     let html = '';
     if (this.editorHost.isOpenForRoot(this.root)) {
       try {
@@ -435,11 +482,17 @@ export class DocRightCalloutsHost {
     await this.editorHost.flushPendingSave();
     const scope = await loadDocRightScope(this.root);
     const llmState = this.llmController.getStateSnapshot();
+    const summaryBullets = await promptSummaryBullets('Iteration summary');
+    if (summaryBullets === null) {
+      return;
+    }
     const iteration = await saveDocRightIteration(this.root, {
       scope,
       model: llmState.model ?? null,
-      reason: 'manual'
+      reason: 'manual',
+      summaryBullets
     });
+    this.refreshTimelineViews();
     void vscode.window.showInformationMessage(`Saved iteration ${iteration.label}.`);
   }
 
@@ -478,12 +531,19 @@ export class DocRightCalloutsHost {
     try {
       await restoreDocRightIteration(this.root, targetId);
       await this.editorHost.reloadFromDisk();
+      await this.llmPanelHost.restoreResponseFromDisk(this.root);
       await this.refresh();
+      this.refreshTimelineViews();
       void vscode.window.showInformationMessage(`Restored iteration #${targetId}.`);
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Failed to restore iteration.';
       void vscode.window.showErrorMessage(message);
     }
+  }
+
+  private refreshTimelineViews(): void {
+    this.refreshTimeline?.();
+    void this.timelinePanelHost.refresh();
   }
 
   private nextContextId(items: DocRightContextItem[]): number {

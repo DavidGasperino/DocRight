@@ -8,6 +8,8 @@
       "runtimeExecutable": "${execPath}",
       "args": [
         "--extensionDevelopmentPath=${workspaceFolder}",
+        "--enable-proposed-api",
+        "local.llm-callouts-refactor",
         "--disable-extension=local.llm-callouts"
       ],
       "outFiles": [
@@ -23,6 +25,8 @@
       "args": [
         "--extensionDevelopmentPath=${workspaceFolder}",
         "--extensionTestsPath=${workspaceFolder}/out/test/suite/index",
+        "--enable-proposed-api",
+        "local.llm-callouts-refactor",
         "--disable-extension=local.llm-callouts"
       ],
       "outFiles": [

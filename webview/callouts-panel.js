@@ -16,6 +16,7 @@ const llmOpenBtn = document.getElementById('llm-open');
 
 const iterationsSectionEl = document.getElementById('iterations-section');
 const iterationSaveBtn = document.getElementById('save-iteration');
+const openTimelineBtn = document.getElementById('open-timeline');
 const iterationsListEl = document.getElementById('iterations-list');
 const iterationsEmptyEl = document.getElementById('iterations-empty');
 
@@ -186,7 +187,8 @@ function render() {
         llmStatusDotEl.classList.add('error');
       }
     }
-    llmOpenBtn.disabled = !state.hasEditor;
+    const hasCallouts = (state.overallCallouts?.length || 0) + (state.inlineCallouts?.length || 0) > 0;
+    llmOpenBtn.disabled = !state.hasEditor || !hasCallouts;
   } else {
     llmSectionEl.style.display = 'none';
   }
@@ -194,6 +196,7 @@ function render() {
   if (state.iterations && state.llm && state.llm.supported) {
     iterationsSectionEl.style.display = 'block';
     iterationSaveBtn.disabled = !state.hasEditor;
+    openTimelineBtn.disabled = !state.hasEditor;
     iterationsListEl.innerHTML = '';
     if (state.iterations.length === 0) {
       iterationsEmptyEl.style.display = 'block';
@@ -221,34 +224,53 @@ function render() {
   } else {
     contextEmptyEl.style.display = 'none';
     state.contexts.forEach((contextItem) => {
-      const item = document.createElement('button');
-      item.type = 'button';
-      item.className = 'list-item' + (contextItem.id === state.selectedContextId ? ' selected' : '');
+      const item = document.createElement('div');
+      item.className = 'list-item context-item' + (contextItem.id === state.selectedContextId ? ' selected' : '');
       item.dataset.id = contextItem.id;
+      if (contextItem.active) {
+        item.classList.add('active');
+      }
+
+      const toggle = document.createElement('input');
+      toggle.type = 'checkbox';
+      toggle.className = 'context-toggle';
+      toggle.checked = Boolean(contextItem.active);
+      toggle.addEventListener('click', (event) => {
+        event.stopPropagation();
+      });
+      toggle.addEventListener('change', () => {
+        vscode.postMessage({ type: 'toggleContextActive', id: contextItem.id, active: toggle.checked });
+      });
+      item.appendChild(toggle);
+
+      const details = document.createElement('div');
+      details.className = 'context-details';
 
       const title = document.createElement('div');
       title.className = 'context-title';
       title.textContent = '#' + String(contextItem.displayNumber) + ' ' + contextItem.name;
-      item.appendChild(title);
+      details.appendChild(title);
 
       if (contextItem.description) {
         const desc = document.createElement('div');
         desc.className = 'context-desc';
         desc.textContent = contextItem.description;
-        item.appendChild(desc);
+        details.appendChild(desc);
       }
 
       const pathEl = document.createElement('div');
       pathEl.className = 'context-path';
       pathEl.textContent = contextItem.path;
-      item.appendChild(pathEl);
+      details.appendChild(pathEl);
+
+      item.appendChild(details);
 
       contextListEl.appendChild(item);
     });
   }
 
   const selectedContext = state.contexts.find((contextItem) => contextItem.id === state.selectedContextId);
-  contextInsertBtn.disabled = !selectedContext || !state.hasEditor;
+  contextInsertBtn.disabled = !selectedContext || !selectedContext.active || !state.hasEditor;
   contextOpenBtn.disabled = !selectedContext;
   contextRemoveBtn.disabled = !selectedContext;
 
@@ -351,6 +373,10 @@ llmOpenBtn.addEventListener('click', () => {
 
 iterationSaveBtn.addEventListener('click', () => {
   vscode.postMessage({ type: 'saveIteration' });
+});
+
+openTimelineBtn.addEventListener('click', () => {
+  vscode.postMessage({ type: 'openTimeline' });
 });
 
 iterationsListEl.addEventListener('click', (event) => {

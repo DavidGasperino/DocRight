@@ -14,6 +14,10 @@ const builds = [
   {
     entry: path.join(__dirname, '..', 'webview', 'callouts-panel.js'),
     outfile: path.join(__dirname, '..', 'media', 'callouts-panel.js')
+  },
+  {
+    entry: path.join(__dirname, '..', 'webview', 'timeline-panel.js'),
+    outfile: path.join(__dirname, '..', 'media', 'timeline-panel.js')
   }
 ];
 

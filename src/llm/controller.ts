@@ -28,6 +28,7 @@ export class LlmController {
   private promptIdCounter = 1;
   private lastPromptId: number | null = null;
   private lastPromptLength: number | null = null;
+  private lastSummaryBullets: string[] = [];
 
   constructor(settings: DocRightSettings, logger: Logger) {
     this.settings = settings;
@@ -63,10 +64,21 @@ export class LlmController {
     this.state.status = 'Prompt ready';
     this.state.canApply = false;
     this.state.isRunning = false;
+    this.lastSummaryBullets = [];
   }
 
   setResponse(response: string): void {
     this.state.response = String(response || '');
+    this.lastSummaryBullets = [];
+  }
+
+  setResponseWithSummary(response: string, summaryBullets: string[]): void {
+    this.state.response = String(response || '');
+    this.lastSummaryBullets = Array.isArray(summaryBullets) ? summaryBullets.slice() : [];
+  }
+
+  getLastSummaryBullets(): string[] {
+    return this.lastSummaryBullets.slice();
   }
 
   getDiagnostics(): LlmDiagnostics {

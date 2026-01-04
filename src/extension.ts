@@ -11,6 +11,9 @@ import { initializeDocRightProject } from './project/initialize';
 import { docRightConfigExists, loadDocRightConfig } from './storage/docright-config';
 import { DocRightEditorHost } from './host/docright-editor-host';
 import { DocRightCalloutsHost } from './host/callouts-panel-host';
+import { DocRightTimelinePanelHost } from './host/timeline-panel-host';
+import { DocRightTimelineProvider } from './host/timeline';
+import { loadDocRightIterationMetadata } from './storage/docright-iterations';
 
 type RefactorApi = {
   getLlmDiagnostics: () => ReturnType<LlmController['getDiagnostics']>;
@@ -23,6 +26,8 @@ export function activate(context: vscode.ExtensionContext): RefactorApi {
   let llmPanelHost: LlmPanelHost | null = null;
   let editorHost: DocRightEditorHost | null = null;
   let calloutsHost: DocRightCalloutsHost | null = null;
+  let timelinePanelHost: DocRightTimelinePanelHost | null = null;
+  const timelineProvider = new DocRightTimelineProvider();
 
   const ensureHosts = (settings: Awaited<ReturnType<typeof ensureSettingsFile>>) => {
     if (!llmController) {
@@ -42,12 +47,17 @@ export function activate(context: vscode.ExtensionContext): RefactorApi {
       llmPanelHost.setEditorHost(editorHost);
     }
 
-    if (editorHost && llmPanelHost && llmController && !calloutsHost) {
+    if (!timelinePanelHost) {
+      timelinePanelHost = new DocRightTimelinePanelHost(context.extensionUri, logger);
+    }
+
+    if (editorHost && llmPanelHost && llmController && timelinePanelHost && !calloutsHost) {
       calloutsHost = new DocRightCalloutsHost(
         context.extensionUri,
         editorHost,
         llmPanelHost,
         llmController,
+        timelinePanelHost,
         settings,
         logger
       );
@@ -56,6 +66,14 @@ export function activate(context: vscode.ExtensionContext): RefactorApi {
       });
       llmPanelHost.setCalloutsRefreshHandler(() => {
         void calloutsHost?.refresh();
+      });
+      llmPanelHost.setTimelineRefreshHandler(() => {
+        timelineProvider.refresh();
+        void timelinePanelHost?.refresh();
+      });
+      calloutsHost.setTimelineRefreshHandler(() => {
+        timelineProvider.refresh();
+        void timelinePanelHost?.refresh();
       });
     } else if (calloutsHost) {
       calloutsHost.updateSettings(settings);
@@ -250,6 +268,41 @@ export function activate(context: vscode.ExtensionContext): RefactorApi {
   context.subscriptions.push(openEditor);
   context.subscriptions.push(setScopeSelection);
   context.subscriptions.push(setScopeFull);
+  context.subscriptions.push(
+    vscode.commands.registerCommand('docRight.timeline.showDetails', async (root: string, iterationId: string) => {
+      if (!root || !iterationId) {
+        return;
+      }
+      const metadata = await loadDocRightIterationMetadata(root, iterationId);
+      if (!metadata) {
+        void vscode.window.showErrorMessage(`Iteration #${iterationId} not found.`);
+        return;
+      }
+      const lines = [
+        `# Iteration #${metadata.id}`,
+        metadata.createdAt ? `**Created:** ${metadata.createdAt}` : '',
+        metadata.parentId ? `**Parent:** #${metadata.parentId}` : '',
+        metadata.reason ? `**Reason:** ${metadata.reason}` : '',
+        '',
+        '## Summary',
+        ...(metadata.summaryBullets && metadata.summaryBullets.length > 0
+          ? metadata.summaryBullets.map((bullet) => `- ${bullet}`)
+          : ['_No summary recorded._'])
+      ].filter((line) => line.length > 0);
+      const doc = await vscode.workspace.openTextDocument({
+        language: 'markdown',
+        content: lines.join('\n')
+      });
+      await vscode.window.showTextDocument(doc, { preview: true, viewColumn: vscode.ViewColumn.Beside });
+    })
+  );
+
+  const registerTimelineProvider = (vscode.workspace as unknown as {
+    registerTimelineProvider?: (scheme: string, provider: DocRightTimelineProvider) => vscode.Disposable;
+  }).registerTimelineProvider;
+  if (typeof registerTimelineProvider === 'function') {
+    context.subscriptions.push(registerTimelineProvider('file', timelineProvider));
+  }
 
   const closeRooResponseEditor = async (document: vscode.TextDocument): Promise<void> => {
     if (document.uri.scheme !== 'file') {

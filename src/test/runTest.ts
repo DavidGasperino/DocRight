@@ -9,10 +9,11 @@ async function main() {
     const extensionDevelopmentPath = path.resolve(__dirname, '../../');
     const extensionTestsPath = path.resolve(__dirname, './suite/index');
     const testWorkspace = path.resolve(__dirname, '../../test-fixtures/workspace');
+    const extensionId = 'local.llm-callouts-refactor';
     await runTests({
       extensionDevelopmentPath,
       extensionTestsPath,
-      launchArgs: [testWorkspace]
+      launchArgs: ['--enable-proposed-api', extensionId, testWorkspace]
     });
   } catch (error) {
     console.error('Failed to run tests');

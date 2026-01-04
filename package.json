@@ -7,6 +7,9 @@
   "engines": {
     "vscode": "^1.80.0"
   },
+  "enabledApiProposals": [
+    "timeline"
+  ],
   "main": "./out/extension.js",
   "activationEvents": [
     "onCommand:docRight.startSession",
@@ -36,6 +39,10 @@
       {
         "command": "docRightRefactor.setScopeFull",
         "title": "DocRight: Set Scope to Full Document"
+      },
+      {
+        "command": "docRight.timeline.showDetails",
+        "title": "DocRight: Show Iteration Details"
       }
     ]
   },

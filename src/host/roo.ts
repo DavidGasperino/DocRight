@@ -6,6 +6,7 @@ import { getDocRightRooResponsePath } from '../storage/docright-paths';
 import { ensureDir } from '../storage/fs';
 import { type DocRightSettings } from '../settings/settings';
 import { type LlmController } from '../llm/controller';
+import { buildDocRightSummaryInstructions, extractDocRightSummary } from '../llm/summary';
 import { type Logger } from './logger';
 
 type RooApi = {
@@ -31,6 +32,7 @@ export class RooIntegration {
   private watcher: fs.FSWatcher | null = null;
   private responsePath: string | null = null;
   private lastContent: string | null = null;
+  private lastSummaryKey: string | null = null;
   private readTimeout: NodeJS.Timeout | null = null;
   private taskStarted = false;
   private opened = false;
@@ -133,7 +135,8 @@ export class RooIntegration {
       '- Use the absolute path when writing the file.',
       '- Overwrite the file contents; no code fences or extra commentary.',
       '- Do not modify any other files.',
-      '- Stop after writing the file.'
+      '- Stop after writing the file.',
+      ...buildDocRightSummaryInstructions()
     ].join('\n');
     return [basePrompt, instructions].filter(Boolean).join('\n\n');
   }
@@ -205,6 +208,7 @@ export class RooIntegration {
     this.stopWatcher();
     this.responsePath = responsePath;
     this.lastContent = null;
+    this.lastSummaryKey = null;
     try {
       const dir = path.dirname(responsePath);
       const fileName = path.basename(responsePath);
@@ -234,13 +238,16 @@ export class RooIntegration {
     }
     try {
       const raw = await fs.promises.readFile(this.responsePath, 'utf8');
-      const content = raw.trim();
-      if (!content || content === this.lastContent) {
+      const { cleaned, bullets } = extractDocRightSummary(raw);
+      const content = cleaned.trim();
+      const summaryKey = bullets.join('\n');
+      if (!content || (content === this.lastContent && summaryKey === this.lastSummaryKey)) {
         return;
       }
       this.lastContent = content;
+      this.lastSummaryKey = summaryKey;
+      this.controller.setResponseWithSummary(content, bullets);
       this.controller.updateState({
-        response: content,
         status: 'Roo response received',
         isRunning: false,
         canApply: true
@@ -295,6 +302,31 @@ export class RooIntegration {
       }
     }
     return baseProvider;
+  }
+
+  private hasVisibleRooPanel(rooApi: RooApi | null): boolean {
+    if (!rooApi || !rooApi.sidebarProvider) {
+      return false;
+    }
+    const baseProvider = rooApi.sidebarProvider as RooProvider & {
+      constructor?: {
+        activeInstances?: Array<{ view?: { viewType?: string } }>;
+        tabPanelId?: string;
+        getVisibleInstance?: () => RooProvider | null;
+      };
+    };
+    const ProviderClass = baseProvider && baseProvider.constructor;
+    if (ProviderClass && ProviderClass.activeInstances && ProviderClass.tabPanelId) {
+      for (const instance of ProviderClass.activeInstances) {
+        if (instance && instance.view && instance.view.viewType === ProviderClass.tabPanelId) {
+          return true;
+        }
+      }
+    }
+    if (ProviderClass && typeof ProviderClass.getVisibleInstance === 'function') {
+      return Boolean(ProviderClass.getVisibleInstance());
+    }
+    return false;
   }
 
   private async setRooMode(mode: string, rooApi?: RooApi | null, rooProvider?: RooProvider | null): Promise<void> {
@@ -371,6 +403,11 @@ export class RooIntegration {
     if (this.opened) {
       return false;
     }
+    const rooApi = await this.getRooApi();
+    if (this.hasVisibleRooPanel(rooApi)) {
+      this.opened = true;
+      return false;
+    }
     try {
       await vscode.commands.executeCommand('roo-cline.openInNewTab');
       this.opened = true;
@@ -387,8 +424,12 @@ export class RooIntegration {
     if (!this.opened) {
       return;
     }
+    const column = this.getRooColumn();
+    if (!this.hasEditorGroup(column)) {
+      return;
+    }
     try {
-      await vscode.commands.executeCommand(this.getEditorGroupFocusCommand(this.getRooColumn()));
+      await vscode.commands.executeCommand(this.getEditorGroupFocusCommand(column));
     } catch (error) {
       // ignore focus errors
     }
@@ -423,6 +464,9 @@ export class RooIntegration {
       return;
     }
     const targetIndex = Math.max(0, Math.min(Number(targetColumn) - 1, 3));
+    if (tabGroups.all.length <= targetIndex) {
+      return;
+    }
     for (let i = 0; i < 6; i += 1) {
       const currentIndex = tabGroups.all.indexOf(tabGroups.activeTabGroup);
       if (currentIndex === -1 || currentIndex === targetIndex) {
@@ -434,5 +478,14 @@ export class RooIntegration {
         await vscode.commands.executeCommand('workbench.action.moveActiveEditorToLeftGroup');
       }
     }
+  }
+
+  private hasEditorGroup(column: vscode.ViewColumn): boolean {
+    const tabGroups = vscode.window.tabGroups;
+    if (!tabGroups) {
+      return false;
+    }
+    const targetIndex = Math.max(0, Math.min(Number(column) - 1, 3));
+    return tabGroups.all.length > targetIndex;
   }
 }

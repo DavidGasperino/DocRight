@@ -4,6 +4,7 @@ export type CalloutsContextView = {
   name: string;
   description?: string;
   path: string;
+  active: boolean;
 };
 
 export type CalloutsCalloutView = {
@@ -55,10 +56,12 @@ export type CalloutsFromWebviewMessage =
   | { type: 'openContext'; id: string }
   | { type: 'insertSelectedContext'; id: string }
   | { type: 'addContextFile' }
+  | { type: 'toggleContextActive'; id: string; active: boolean }
   | { type: 'setScopeSelection' }
   | { type: 'setScopeFull' }
   | { type: 'runLlm' }
   | { type: 'saveIteration' }
+  | { type: 'openTimeline' }
   | { type: 'restoreIteration'; id: string }
   | { type: 'instructionFocus'; target: 'inline' | 'overall' | null };
 
@@ -75,10 +78,12 @@ const calloutsMessageTypes = new Set<CalloutsFromWebviewMessage['type']>([
   'openContext',
   'insertSelectedContext',
   'addContextFile',
+  'toggleContextActive',
   'setScopeSelection',
   'setScopeFull',
   'runLlm',
   'saveIteration',
+  'openTimeline',
   'restoreIteration',
   'instructionFocus'
 ]);

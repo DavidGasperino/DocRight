@@ -3,12 +3,16 @@ import * as vscode from 'vscode';
 import { type DocRightSettings } from '../settings/settings';
 import { loadDocRightScope } from '../storage/docright-scope';
 import { saveDocRightIteration } from '../storage/docright-iterations';
+import { loadDocRightContexts, saveDocRightContexts } from '../storage/docright-contexts';
+import { getDocRightRooResponsePath } from '../storage/docright-paths';
 import { LlmController } from '../llm/controller';
+import { extractDocRightSummary } from '../llm/summary';
 import { getLlmPanelHtml } from '../webview/llm-panel';
 import { isLlmFromWebviewMessage } from '../webview/messages';
 import { type Logger } from './logger';
 import { RooIntegration } from './roo';
 import { type DocRightEditorHost } from './docright-editor-host';
+import { promptSummaryBullets } from './iteration-summary';
 
 export class LlmPanelHost {
   private panel: vscode.WebviewPanel | null = null;
@@ -20,6 +24,7 @@ export class LlmPanelHost {
   private editorHost: DocRightEditorHost | null = null;
   private root: string | null = null;
   private refreshCallouts: (() => void) | null = null;
+  private refreshTimeline: (() => void) | null = null;
 
   constructor(extensionUri: vscode.Uri, controller: LlmController, settings: DocRightSettings, logger: Logger) {
     this.extensionUri = extensionUri;
@@ -50,6 +55,51 @@ export class LlmPanelHost {
 
   setCalloutsRefreshHandler(handler: (() => void) | null): void {
     this.refreshCallouts = handler;
+  }
+
+  setTimelineRefreshHandler(handler: (() => void) | null): void {
+    this.refreshTimeline = handler;
+  }
+
+  async restoreResponseFromDisk(root: string): Promise<void> {
+    const responsePath = getDocRightRooResponsePath(root);
+    let raw = '';
+    try {
+      const buffer = await vscode.workspace.fs.readFile(vscode.Uri.file(responsePath));
+      raw = Buffer.from(buffer).toString('utf8');
+    } catch (error) {
+      raw = '';
+    }
+
+    const { cleaned, bullets } = extractDocRightSummary(raw);
+    const trimmed = cleaned.trim();
+    this.controller.setResponseWithSummary(trimmed, bullets);
+    this.controller.updateState({
+      status: trimmed ? 'Iteration restored' : 'Idle',
+      isRunning: false,
+      canApply: trimmed.length > 0
+    });
+    await this.controller.postState();
+  }
+
+  private async resetContextSelections(): Promise<void> {
+    const root = this.root;
+    if (!root) {
+      return;
+    }
+    const contextsState = await loadDocRightContexts(root);
+    let changed = false;
+    const nextItems = contextsState.items.map((item) => {
+      if (item.active) {
+        changed = true;
+      }
+      return { ...item, active: false };
+    });
+    if (!changed) {
+      return;
+    }
+    await saveDocRightContexts(root, { items: nextItems });
+    this.refreshCallouts?.();
   }
 
   async open(
@@ -89,6 +139,7 @@ export class LlmPanelHost {
       if (message.type === 'llm.sendRoo') {
         try {
           await this.roo.sendPrompt(message.prompt);
+          await this.resetContextSelections();
         } catch (error) {
           const messageText = error instanceof Error ? error.message : 'Failed to start Roo Code task.';
           void vscode.window.showErrorMessage(messageText);
@@ -154,6 +205,7 @@ export class LlmPanelHost {
       }
       await this.editorHost.applyScopeUpdate(trimmed, scope);
       await this.editorHost.clearCallouts();
+      await this.resetContextSelections();
       this.refreshCallouts?.();
       this.roo.stop();
       this.controller.updateState({
@@ -170,6 +222,7 @@ export class LlmPanelHost {
 
   private async rejectResponse(): Promise<void> {
     this.roo.stop();
+    this.controller.setResponse('');
     this.controller.updateState({
       status: 'Rejected',
       canApply: false,
@@ -189,11 +242,23 @@ export class LlmPanelHost {
     }
     const llmState = this.controller.getStateSnapshot();
     const scope = await loadDocRightScope(root);
+    let summaryBullets: string[] = [];
+    if (reason === 'manual') {
+      const manualBullets = await promptSummaryBullets('Iteration summary');
+      if (manualBullets === null) {
+        return;
+      }
+      summaryBullets = manualBullets;
+    } else {
+      summaryBullets = this.controller.getLastSummaryBullets();
+    }
     const iteration = await saveDocRightIteration(root, {
       scope,
       model: llmState.model ?? null,
-      reason
+      reason,
+      summaryBullets
     });
+    this.refreshTimeline?.();
     if (reason === 'manual') {
       void vscode.window.showInformationMessage(`Saved iteration ${iteration.label}.`);
     }

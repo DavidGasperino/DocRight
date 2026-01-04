@@ -48,6 +48,23 @@ export function getCalloutsPanelHtml(options: CalloutsPanelOptions): string {
       max-height: 180px;
       overflow-y: auto;
     }
+    .context-item {
+      display: flex;
+      gap: 8px;
+      align-items: flex-start;
+    }
+    .context-item.active {
+      border-color: var(--vscode-focusBorder);
+    }
+    .context-toggle {
+      margin-top: 2px;
+      width: 14px;
+      height: 14px;
+      accent-color: var(--vscode-button-background);
+    }
+    .context-details {
+      flex: 1;
+    }
     .list-item {
       text-align: left;
       padding: 6px 8px;
@@ -210,6 +227,7 @@ export function getCalloutsPanelHtml(options: CalloutsPanelOptions): string {
         <div class="section-body">
           <div class="section-actions">
             <button id="save-iteration" class="secondary" type="button">Save Iteration</button>
+            <button id="open-timeline" type="button">Timeline</button>
           </div>
           <div id="iterations-empty" class="empty small">No iterations saved yet.</div>
           <div id="iterations-list" class="list callout-list"></div>
