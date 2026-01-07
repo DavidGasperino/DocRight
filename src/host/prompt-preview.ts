@@ -22,6 +22,12 @@ export async function buildPromptPreview(
 
   const llmPreamble = await readDocRightPrompt(root, settings.prompts.llmPreambleFile, '');
   const iterationTemplate = await readDocRightPrompt(root, settings.prompts.iterationPreambleFile, '');
+  const responseFormat = [
+    'Response format (override any conflicting instructions):',
+    '- Return the complete updated HTML for the scoped section (preserve unchanged markup).',
+    '- Output HTML only (no explanations); remove <llm-edit> wrappers.'
+  ].join('\n');
+  const iterationPreamble = [iterationTemplate.trim(), responseFormat].filter(Boolean).join('\n\n');
 
   const html = options.html ?? '';
   const xml = buildDocRightXml(
@@ -36,7 +42,7 @@ export async function buildPromptPreview(
 
   return buildDocRightPrompt({
     llmPreamble,
-    iterationPreambleTemplate: iterationTemplate,
+    iterationPreambleTemplate: iterationPreamble,
     scope,
     xml
   });

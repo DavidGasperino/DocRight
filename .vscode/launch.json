@@ -9,7 +9,7 @@
       "args": [
         "--extensionDevelopmentPath=${workspaceFolder}",
         "--enable-proposed-api",
-        "local.llm-callouts-refactor",
+        "davidgasperino.docright",
         "--disable-extension=local.llm-callouts"
       ],
       "outFiles": [
@@ -26,7 +26,7 @@
         "--extensionDevelopmentPath=${workspaceFolder}",
         "--extensionTestsPath=${workspaceFolder}/out/test/suite/index",
         "--enable-proposed-api",
-        "local.llm-callouts-refactor",
+        "davidgasperino.docright",
         "--disable-extension=local.llm-callouts"
       ],
       "outFiles": [

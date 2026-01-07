@@ -13,6 +13,7 @@ import { type Logger } from './logger';
 import { RooIntegration } from './roo';
 import { type DocRightEditorHost } from './docright-editor-host';
 import { promptSummaryBullets } from './iteration-summary';
+import { appendDiagnosticsLog, captureTabGroups } from './ui-diagnostics';
 
 export class LlmPanelHost {
   private panel: vscode.WebviewPanel | null = null;
@@ -38,6 +39,14 @@ export class LlmPanelHost {
     this.settings = settings;
     this.controller.updateSettings(settings);
     this.roo.updateSettings(settings);
+  }
+
+  isOpen(): boolean {
+    return Boolean(this.panel);
+  }
+
+  getViewColumn(): vscode.ViewColumn | null {
+    return this.panel?.viewColumn ?? null;
   }
 
   setEditorHost(editorHost: DocRightEditorHost | null): void {
@@ -110,7 +119,14 @@ export class LlmPanelHost {
     const preserveFocus = options?.preserveFocus ?? true;
     if (this.panel) {
       this.panel.title = 'DocRight LLM';
-      this.panel.reveal(viewColumn, preserveFocus);
+      const revealColumn = this.panel.viewColumn ?? viewColumn;
+      this.logUiEvent('llm.open.reveal', {
+        requestedViewColumn: viewColumn,
+        preserveFocus,
+        panelViewColumn: this.panel.viewColumn ?? null,
+        revealColumn
+      });
+      this.panel.reveal(revealColumn, preserveFocus);
       this.controller.setPrompt(prompt);
       await this.controller.postState();
       return;
@@ -126,6 +142,11 @@ export class LlmPanelHost {
         localResourceRoots: [this.extensionUri]
       }
     );
+    this.logUiEvent('llm.open.created', {
+      requestedViewColumn: viewColumn,
+      preserveFocus,
+      panelViewColumn: this.panel.viewColumn ?? null
+    });
 
     this.controller.setMessenger({
       postMessage: (message) => this.panel?.webview.postMessage(message) ?? Promise.resolve(false)
@@ -167,6 +188,14 @@ export class LlmPanelHost {
       this.controller.setMessenger(null);
     });
 
+    this.panel.onDidChangeViewState((event) => {
+      this.logUiEvent('llm.viewState', {
+        active: event.webviewPanel.active,
+        visible: event.webviewPanel.visible,
+        viewColumn: event.webviewPanel.viewColumn ?? null
+      });
+    });
+
     const scriptUri = this.panel.webview.asWebviewUri(
       vscode.Uri.joinPath(this.extensionUri, 'media', 'llm-panel.js')
     );
@@ -179,6 +208,19 @@ export class LlmPanelHost {
 
     this.controller.setPrompt(prompt);
     await this.controller.postState();
+  }
+
+  private logUiEvent(event: string, extra?: Record<string, unknown>): void {
+    if (!this.root) {
+      return;
+    }
+    const payload = {
+      root: this.root,
+      llmViewColumn: this.panel?.viewColumn ?? null,
+      tabGroups: captureTabGroups(),
+      ...(extra ?? {})
+    };
+    void appendDiagnosticsLog(this.root, event, payload);
   }
 
   private async applyResponse(response: string): Promise<void> {

@@ -9,7 +9,7 @@ async function main() {
     const extensionDevelopmentPath = path.resolve(__dirname, '../../');
     const extensionTestsPath = path.resolve(__dirname, './suite/index');
     const testWorkspace = path.resolve(__dirname, '../../test-fixtures/workspace');
-    const extensionId = 'local.llm-callouts-refactor';
+    const extensionId = 'davidgasperino.docright';
     await runTests({
       extensionDevelopmentPath,
       extensionTestsPath,

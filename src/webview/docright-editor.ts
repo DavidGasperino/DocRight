@@ -10,7 +10,7 @@ export function getDocRightEditorHtml(options: DocRightEditorHtmlOptions): strin
   const csp = [
     "default-src 'none'",
     `img-src ${options.cspSource} data: https:`,
-    `style-src ${options.cspSource} 'nonce-${nonce}'`,
+    `style-src ${options.cspSource} 'nonce-${nonce}' 'unsafe-inline'`,
     `script-src ${options.cspSource} 'nonce-${nonce}'`
   ].join('; ');
 
@@ -71,6 +71,19 @@ export function getDocRightEditorHtml(options: DocRightEditorHtmlOptions): strin
       font-size: 12px;
       line-height: 1.2;
       cursor: pointer;
+    }
+    .toolbar-icon-button {
+      width: 28px;
+      height: 28px;
+      padding: 4px;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+    }
+    .toolbar-icon {
+      width: 16px;
+      height: 16px;
+      display: block;
     }
     .toolbar-button:hover {
       background: var(--vscode-button-secondaryHoverBackground);
@@ -194,7 +207,9 @@ export function getDocRightEditorHtml(options: DocRightEditorHtmlOptions): strin
       padding: 0 3px;
     }
     .dr-table {
-      width: 100%;
+      width: auto;
+      min-width: 100%;
+      table-layout: fixed;
       border-collapse: collapse;
       margin: 0 0 0.9em 0;
     }
@@ -227,6 +242,14 @@ export function getDocRightEditorHtml(options: DocRightEditorHtmlOptions): strin
       padding: 4px 0;
       display: none;
     }
+    .docright-menu .table-only,
+    .docright-menu .table-sep {
+      display: none;
+    }
+    .docright-menu[data-table="true"] .table-only,
+    .docright-menu[data-table="true"] .table-sep {
+      display: block;
+    }
     .docright-menu button {
       display: block;
       width: 100%;
@@ -249,6 +272,10 @@ export function getDocRightEditorHtml(options: DocRightEditorHtmlOptions): strin
       height: 1px;
       margin: 4px 0;
       background: var(--vscode-panel-border);
+    }
+    .editor-container.is-resizing,
+    .editor-container.is-resizing * {
+      cursor: col-resize;
     }
     .status {
       border-top: 1px solid var(--vscode-panel-border);
@@ -297,6 +324,20 @@ export function getDocRightEditorHtml(options: DocRightEditorHtmlOptions): strin
       <button class="toolbar-button" id="docright-search-next" title="Next match">Next</button>
       <span class="toolbar-search-count" id="docright-search-count">0 / 0</span>
     </div>
+    <div class="toolbar-group">
+      <button
+        class="toolbar-button toolbar-icon-button"
+        data-action="copyMarkdown"
+        title="Copy (Markdown + HTML)"
+        aria-label="Copy (Markdown + HTML)"
+      >
+        <svg class="toolbar-icon" viewBox="0 0 24 24" aria-hidden="true">
+          <rect x="7" y="7" width="10" height="12" rx="1.5" fill="none" stroke="currentColor" stroke-width="1.5" />
+          <path d="M9 5h8a1.5 1.5 0 0 1 1.5 1.5v8" fill="none" stroke="currentColor" stroke-width="1.5" />
+          <path d="M13 5v4h4" fill="none" stroke="currentColor" stroke-width="1.5" />
+        </svg>
+      </button>
+    </div>
   </div>
   <div class="editor-container">
     <div id="scope-overlay" class="scope-overlay"></div>
@@ -310,6 +351,18 @@ export function getDocRightEditorHtml(options: DocRightEditorHtmlOptions): strin
     <div class="menu-sep"></div>
     <button type="button" data-action="inline">Add Inline Callout</button>
     <button type="button" data-action="overall">Add Overall Callout</button>
+    <div class="menu-sep table-sep"></div>
+    <button type="button" class="table-only" data-action="table-row-above">Insert Row Above</button>
+    <button type="button" class="table-only" data-action="table-row-below">Insert Row Below</button>
+    <button type="button" class="table-only" data-action="table-column-left">Insert Column Left</button>
+    <button type="button" class="table-only" data-action="table-column-right">Insert Column Right</button>
+    <button type="button" class="table-only" data-action="table-row-delete">Delete Row</button>
+    <button type="button" class="table-only" data-action="table-column-delete">Delete Column</button>
+    <button type="button" class="table-only" data-action="table-toggle-header-row">Toggle Header Row</button>
+    <button type="button" class="table-only" data-action="table-toggle-header-column">Toggle Header Column</button>
+    <button type="button" class="table-only" data-action="table-delete">Delete Table</button>
+    <button type="button" class="table-only" data-action="table-cell-fill">Set Cell Fill...</button>
+    <button type="button" class="table-only" data-action="table-text-color">Set Text Color...</button>
   </div>
   <div id="status" class="status">Loading DocRight editor...</div>
   <script type="module" nonce="${nonce}" src="${options.scriptUri}"></script>

@@ -1,4 +1,3 @@
-import * as path from 'path';
 import * as vscode from 'vscode';
 
 import { getWorkspaceRoot } from './host/workspace';
@@ -13,7 +12,14 @@ import { DocRightEditorHost } from './host/docright-editor-host';
 import { DocRightCalloutsHost } from './host/callouts-panel-host';
 import { DocRightTimelinePanelHost } from './host/timeline-panel-host';
 import { DocRightTimelineProvider } from './host/timeline';
+import { DocRightQuickstartViewProvider } from './host/quickstart-view';
 import { loadDocRightIterationMetadata } from './storage/docright-iterations';
+import {
+  appendDiagnosticsLog,
+  captureTabGroups,
+  getDocRightRootFromResponsePath,
+  isRooResponsePath
+} from './host/ui-diagnostics';
 
 type RefactorApi = {
   getLlmDiagnostics: () => ReturnType<LlmController['getDiagnostics']>;
@@ -28,6 +34,7 @@ export function activate(context: vscode.ExtensionContext): RefactorApi {
   let calloutsHost: DocRightCalloutsHost | null = null;
   let timelinePanelHost: DocRightTimelinePanelHost | null = null;
   const timelineProvider = new DocRightTimelineProvider();
+  const quickstartProvider = new DocRightQuickstartViewProvider(context.extensionUri);
 
   const ensureHosts = (settings: Awaited<ReturnType<typeof ensureSettingsFile>>) => {
     if (!llmController) {
@@ -80,18 +87,193 @@ export function activate(context: vscode.ExtensionContext): RefactorApi {
     }
   };
 
+  const toViewColumn = (value: number | undefined, fallback: vscode.ViewColumn): vscode.ViewColumn => {
+    const column = Number(value);
+    if (Number.isFinite(column) && column > 0) {
+      return column as vscode.ViewColumn;
+    }
+    return fallback;
+  };
+
+  const ensureEditorGroup = async (targetIndex: number): Promise<void> => {
+    const tabGroups = vscode.window.tabGroups;
+    if (!tabGroups) {
+      return;
+    }
+    while (tabGroups.all.length <= targetIndex) {
+      try {
+        await vscode.commands.executeCommand('workbench.action.focusLastEditorGroup');
+        await vscode.commands.executeCommand('workbench.action.newGroupRight');
+      } catch (error) {
+        break;
+      }
+    }
+  };
+
+  const focusEditorGroup = async (targetColumn: vscode.ViewColumn): Promise<void> => {
+    const targetIndex = Math.max(0, Math.min(Number(targetColumn) - 1, 3));
+    await ensureEditorGroup(targetIndex);
+    const commandMap: Record<number, string> = {
+      [vscode.ViewColumn.One]: 'workbench.action.focusFirstEditorGroup',
+      [vscode.ViewColumn.Two]: 'workbench.action.focusSecondEditorGroup',
+      [vscode.ViewColumn.Three]: 'workbench.action.focusThirdEditorGroup',
+      [vscode.ViewColumn.Four]: 'workbench.action.focusFourthEditorGroup'
+    };
+    const command = commandMap[targetColumn] ?? 'workbench.action.focusLastEditorGroup';
+    try {
+      await vscode.commands.executeCommand(command);
+    } catch (error) {
+      // Ignore focus errors.
+    }
+  };
+
+  const moveActiveEditorToColumn = async (targetColumn: vscode.ViewColumn): Promise<void> => {
+    const tabGroups = vscode.window.tabGroups;
+    if (!tabGroups || !tabGroups.activeTabGroup) {
+      return;
+    }
+    const targetIndex = Math.max(0, Math.min(Number(targetColumn) - 1, 3));
+    await ensureEditorGroup(targetIndex);
+    for (let i = 0; i < 6; i += 1) {
+      const currentIndex = tabGroups.all.indexOf(tabGroups.activeTabGroup);
+      if (currentIndex === -1 || currentIndex === targetIndex) {
+        return;
+      }
+      if (currentIndex < targetIndex) {
+        const moved = await tryMoveActiveEditor('right');
+        if (!moved) {
+          return;
+        }
+      } else {
+        const moved = await tryMoveActiveEditor('left');
+        if (!moved) {
+          return;
+        }
+      }
+    }
+  };
+
+  const tryMoveActiveEditor = async (direction: 'left' | 'right'): Promise<boolean> => {
+    const commands =
+      direction === 'right'
+        ? [
+            'workbench.action.moveEditorToRightGroup',
+            'workbench.action.moveActiveEditorToRightGroup',
+            'workbench.action.moveEditorToNextGroup'
+          ]
+        : [
+            'workbench.action.moveEditorToLeftGroup',
+            'workbench.action.moveActiveEditorToLeftGroup',
+            'workbench.action.moveEditorToPreviousGroup'
+          ];
+    for (const command of commands) {
+      try {
+        await vscode.commands.executeCommand(command);
+        return true;
+      } catch (error) {
+        // Try the next command if this one isn't available.
+      }
+    }
+    return false;
+  };
+
+  const getTabViewType = (tab: vscode.Tab): string | null => {
+    const input = tab.input as vscode.TabInputWebview | { viewType?: string };
+    if (input && typeof input === 'object' && 'viewType' in input && input.viewType) {
+      return String(input.viewType);
+    }
+    return null;
+  };
+
+  const findTabByViewType = (predicate: (viewType: string) => boolean): { group: vscode.TabGroup; index: number } | null => {
+    for (const group of vscode.window.tabGroups.all) {
+      const index = group.tabs.findIndex((tab) => {
+        const viewType = getTabViewType(tab);
+        return viewType ? predicate(viewType) : false;
+      });
+      if (index >= 0) {
+        return { group, index };
+      }
+    }
+    return null;
+  };
+
+  const activateTabAtIndex = async (group: vscode.TabGroup, index: number): Promise<void> => {
+    const column = group.viewColumn ?? vscode.ViewColumn.One;
+    await vscode.commands.executeCommand(getGroupFocusCommand(column));
+    const commandIndex = Math.max(1, Math.min(index + 1, 9));
+    await vscode.commands.executeCommand(`workbench.action.openEditorAtIndex${commandIndex}`);
+  };
+
+  const moveTabToColumn = async (
+    predicate: (viewType: string) => boolean,
+    targetColumn: vscode.ViewColumn
+  ): Promise<void> => {
+    const info = findTabByViewType(predicate);
+    if (!info) {
+      return;
+    }
+    await activateTabAtIndex(info.group, info.index);
+    const currentColumn = info.group.viewColumn ?? vscode.ViewColumn.One;
+    const steps = Number(targetColumn) - Number(currentColumn);
+    if (!Number.isFinite(steps) || steps === 0) {
+      return;
+    }
+    for (let i = 0; i < Math.abs(steps); i += 1) {
+      const moved = await tryMoveActiveEditor(steps > 0 ? 'right' : 'left');
+      if (!moved) {
+        return;
+      }
+    }
+  };
+
+  const normalizePanelLayout = async (settings: Awaited<ReturnType<typeof ensureSettingsFile>>): Promise<void> => {
+    await ensureEditorGroup(3);
+    await moveTabToColumn((viewType) => viewType === 'docRightRefactor.editor', toViewColumn(settings.ui.columns.editor, vscode.ViewColumn.One));
+    await moveTabToColumn((viewType) => viewType === 'docRightRefactor.calloutsPanel', toViewColumn(settings.ui.columns.callouts, vscode.ViewColumn.Two));
+    await moveTabToColumn((viewType) => viewType === 'docRightRefactor.llmPanel', toViewColumn(settings.ui.columns.llm, vscode.ViewColumn.Three));
+    await moveTabToColumn((viewType) => viewType.toLowerCase().includes('roo'), toViewColumn(settings.ui.columns.roo, vscode.ViewColumn.Four));
+  };
+
+  const getGroupFocusCommand = (column: vscode.ViewColumn): string => {
+    switch (column) {
+      case vscode.ViewColumn.One:
+        return 'workbench.action.focusFirstEditorGroup';
+      case vscode.ViewColumn.Two:
+        return 'workbench.action.focusSecondEditorGroup';
+      case vscode.ViewColumn.Three:
+        return 'workbench.action.focusThirdEditorGroup';
+      case vscode.ViewColumn.Four:
+        return 'workbench.action.focusFourthEditorGroup';
+      default:
+        return 'workbench.action.focusLastEditorGroup';
+    }
+  };
+
+  const delay = async (ms: number): Promise<void> => {
+    await new Promise((resolve) => setTimeout(resolve, ms));
+  };
+
   const getSessionRoot = (): string | null => activeRoot ?? getWorkspaceRoot();
 
-  const pickDocRightRoot = async (): Promise<{ root: string; mode: 'new' | 'resume' } | null> => {
-    const choice = await vscode.window.showQuickPick(
-      [
-        { label: 'Start a new DocRight project', value: 'new' as const },
-        { label: 'Resume an existing DocRight project', value: 'resume' as const }
-      ],
-      { placeHolder: 'Start a new DocRight session or resume an existing one' }
-    );
-    if (!choice) {
-      return null;
+  const pickDocRightRoot = async (
+    modeOverride?: 'new' | 'resume'
+  ): Promise<{ root: string; mode: 'new' | 'resume' } | null> => {
+    let mode: 'new' | 'resume';
+    if (modeOverride) {
+      mode = modeOverride;
+    } else {
+      const choice = await vscode.window.showQuickPick(
+        [
+          { label: 'Start a new DocRight project', value: 'new' as const },
+          { label: 'Resume an existing DocRight project', value: 'resume' as const }
+        ],
+        { placeHolder: 'Start a new DocRight session or resume an existing one' }
+      );
+      if (!choice) {
+        return null;
+      }
+      mode = choice.value;
     }
 
     const workspaceRoot = getWorkspaceRoot();
@@ -105,7 +287,7 @@ export function activate(context: vscode.ExtensionContext): RefactorApi {
     if (!folders || folders.length === 0) {
       return null;
     }
-    return { root: folders[0].fsPath, mode: choice.value };
+    return { root: folders[0].fsPath, mode };
   };
 
   const openRooPanel = async (settings: Awaited<ReturnType<typeof ensureSettingsFile>>) => {
@@ -114,7 +296,15 @@ export function activate(context: vscode.ExtensionContext): RefactorApi {
       return;
     }
     try {
+      const targetColumn = toViewColumn(settings.ui.columns.roo, vscode.ViewColumn.Four);
+      await focusEditorGroup(targetColumn);
       await vscode.commands.executeCommand('roo-cline.openInNewTab');
+      try {
+        await vscode.commands.executeCommand('roo-cline.focusInput');
+      } catch (error) {
+        // Ignore if focus command is unavailable.
+      }
+      await delay(150);
       llmPanelHost?.markRooOpened();
     } catch (error) {
       logger.debug('Failed to open Roo panel', error);
@@ -140,14 +330,14 @@ export function activate(context: vscode.ExtensionContext): RefactorApi {
     if (llmPanelHost) {
       llmPanelHost.setRoot(root);
       await llmPanelHost.open(prompt, {
-        viewColumn: vscode.ViewColumn.Three,
+        viewColumn: toViewColumn(settings.ui.columns.llm, vscode.ViewColumn.Three),
         preserveFocus: true
       });
     }
   };
 
-  const startSession = vscode.commands.registerCommand('docRight.startSession', async () => {
-    const selection = await pickDocRightRoot();
+  const runSessionFlow = async (modeOverride?: 'new' | 'resume') => {
+    const selection = await pickDocRightRoot(modeOverride);
     if (!selection) {
       return;
     }
@@ -180,10 +370,14 @@ export function activate(context: vscode.ExtensionContext): RefactorApi {
         await editorHost.open(root);
       }
       if (calloutsHost) {
-        await calloutsHost.open(root, { viewColumn: vscode.ViewColumn.Two, preserveFocus: true });
+        await calloutsHost.open(root, {
+          viewColumn: toViewColumn(settings.ui.columns.callouts, vscode.ViewColumn.Two),
+          preserveFocus: true
+        });
       }
       await openLlmPanelForRoot(root, settings);
       await openRooPanel(settings);
+      await normalizePanelLayout(settings);
       void vscode.window.showInformationMessage('DocRight project created.');
       return;
     }
@@ -199,11 +393,27 @@ export function activate(context: vscode.ExtensionContext): RefactorApi {
       await editorHost.open(root);
     }
     if (calloutsHost) {
-      await calloutsHost.open(root, { viewColumn: vscode.ViewColumn.Two, preserveFocus: true });
+      await calloutsHost.open(root, {
+        viewColumn: toViewColumn(settings.ui.columns.callouts, vscode.ViewColumn.Two),
+        preserveFocus: true
+      });
     }
     await openLlmPanelForRoot(root, settings);
     await openRooPanel(settings);
+    await normalizePanelLayout(settings);
     void vscode.window.showInformationMessage('DocRight project resumed.');
+  };
+
+  const startSession = vscode.commands.registerCommand('docRight.startSession', async () => {
+    await runSessionFlow();
+  });
+
+  const startSessionNew = vscode.commands.registerCommand('docRight.startSessionNew', async () => {
+    await runSessionFlow('new');
+  });
+
+  const startSessionResume = vscode.commands.registerCommand('docRight.startSessionResume', async () => {
+    await runSessionFlow('resume');
   });
 
   const openLlmPanel = vscode.commands.registerCommand('docRightRefactor.openLlmPanel', async () => {
@@ -264,10 +474,15 @@ export function activate(context: vscode.ExtensionContext): RefactorApi {
   });
 
   context.subscriptions.push(startSession);
+  context.subscriptions.push(startSessionNew);
+  context.subscriptions.push(startSessionResume);
   context.subscriptions.push(openLlmPanel);
   context.subscriptions.push(openEditor);
   context.subscriptions.push(setScopeSelection);
   context.subscriptions.push(setScopeFull);
+  context.subscriptions.push(
+    vscode.window.registerWebviewViewProvider(DocRightQuickstartViewProvider.viewType, quickstartProvider)
+  );
   context.subscriptions.push(
     vscode.commands.registerCommand('docRight.timeline.showDetails', async (root: string, iterationId: string) => {
       if (!root || !iterationId) {
@@ -304,22 +519,149 @@ export function activate(context: vscode.ExtensionContext): RefactorApi {
     context.subscriptions.push(registerTimelineProvider('file', timelineProvider));
   }
 
+  const describeEditor = (editor: vscode.TextEditor | undefined | null): string | null => {
+    return editor?.document?.uri?.fsPath ?? null;
+  };
+
+  const logRooResponseEvent = (
+    event: string,
+    filePath: string,
+    extra?: Record<string, unknown>
+  ): void => {
+    const root = getDocRightRootFromResponsePath(filePath);
+    if (!root) {
+      return;
+    }
+    const payload = {
+      filePath,
+      activeEditor: describeEditor(vscode.window.activeTextEditor),
+      visibleEditors: vscode.window.visibleTextEditors.map((editor) => editor.document.uri.fsPath),
+      tabGroups: captureTabGroups(),
+      ...(extra ?? {})
+    };
+    void appendDiagnosticsLog(root, event, payload);
+  };
+
+  const rooResponseCleanupTimers = new Map<string, NodeJS.Timeout>();
+
+  const getRooResponsePathsFromTab = (tab: vscode.Tab): string[] => {
+    const input = tab.input as unknown;
+    if (input instanceof vscode.TabInputText) {
+      return [input.uri.fsPath];
+    }
+    if (input instanceof vscode.TabInputTextDiff) {
+      return [input.original.fsPath, input.modified.fsPath];
+    }
+    if (input instanceof vscode.TabInputCustom || input instanceof vscode.TabInputNotebook) {
+      return [input.uri.fsPath];
+    }
+    return [];
+  };
+
+  const closeRooResponseTabsForPath = async (filePath: string): Promise<void> => {
+    const tabsToClose: vscode.Tab[] = [];
+    for (const group of vscode.window.tabGroups.all) {
+      for (const tab of group.tabs) {
+        if (getRooResponsePathsFromTab(tab).some((candidate) => candidate === filePath)) {
+          tabsToClose.push(tab);
+        }
+      }
+    }
+    for (const tab of tabsToClose) {
+      logRooResponseEvent('rooResponse.tabOpened', filePath, { tabLabel: tab.label });
+      await vscode.window.tabGroups.close(tab, true);
+      logRooResponseEvent('rooResponse.tabClosed', filePath, { tabLabel: tab.label });
+    }
+  };
+
+  const scheduleRooResponseCleanup = (filePath: string, reason: string): void => {
+    if (!isRooResponsePath(filePath)) {
+      return;
+    }
+    const existing = rooResponseCleanupTimers.get(filePath);
+    if (existing) {
+      clearTimeout(existing);
+    }
+    const timeout = setTimeout(async () => {
+      rooResponseCleanupTimers.delete(filePath);
+      const liveDoc = vscode.workspace.textDocuments.find(
+        (doc) => doc.uri.scheme === 'file' && doc.uri.fsPath === filePath
+      );
+      const contentLength = liveDoc ? liveDoc.getText().trim().length : 0;
+      if (liveDoc && contentLength > 0) {
+        if (liveDoc.isDirty) {
+          try {
+            await liveDoc.save();
+            logRooResponseEvent('rooResponse.autoSaved', filePath, { reason, contentLength });
+          } catch (error) {
+            logRooResponseEvent('rooResponse.autoSaveFailed', filePath, { reason, contentLength });
+          }
+        }
+        await closeRooResponseTabsForPath(filePath);
+      } else {
+        logRooResponseEvent('rooResponse.autoSaveSkippedEmpty', filePath, { reason, contentLength });
+      }
+    }, 300);
+    rooResponseCleanupTimers.set(filePath, timeout);
+  };
+
   const closeRooResponseEditor = async (document: vscode.TextDocument): Promise<void> => {
     if (document.uri.scheme !== 'file') {
       return;
     }
-    const responseSuffix = path.join('.docright', 'llm', 'roo_response.html');
-    if (!document.uri.fsPath.endsWith(responseSuffix)) {
+    const filePath = document.uri.fsPath;
+    if (!isRooResponsePath(filePath)) {
       return;
     }
-    const active = vscode.window.activeTextEditor;
-    if (!active || active.document !== document) {
-      return;
-    }
-    await vscode.commands.executeCommand('workbench.action.closeActiveEditor');
+    logRooResponseEvent('rooResponse.opened', filePath);
+    scheduleRooResponseCleanup(filePath, 'opened');
   };
 
   context.subscriptions.push(vscode.workspace.onDidOpenTextDocument((document) => void closeRooResponseEditor(document)));
+
+  context.subscriptions.push(
+    vscode.window.tabGroups.onDidChangeTabs((event) => {
+      for (const tab of event.opened) {
+        const paths = getRooResponsePathsFromTab(tab).filter((value) => isRooResponsePath(value));
+        if (paths.length > 0) {
+          scheduleRooResponseCleanup(paths[0], 'tabOpened');
+        }
+      }
+    })
+  );
+
+  context.subscriptions.push(
+    vscode.workspace.onDidChangeTextDocument((event) => {
+      if (event.document.uri.scheme !== 'file') {
+        return;
+      }
+      const filePath = event.document.uri.fsPath;
+      if (isRooResponsePath(filePath)) {
+        scheduleRooResponseCleanup(filePath, 'changed');
+      }
+    })
+  );
+
+  context.subscriptions.push(
+    vscode.window.onDidChangeActiveTextEditor((editor) => {
+      const filePath = editor?.document?.uri?.fsPath;
+      if (filePath && isRooResponsePath(filePath)) {
+        logRooResponseEvent('rooResponse.activeEditorChanged', filePath);
+      }
+    })
+  );
+
+  context.subscriptions.push(
+    vscode.window.onDidChangeVisibleTextEditors((editors) => {
+      for (const editor of editors) {
+        const filePath = editor.document.uri.fsPath;
+        if (isRooResponsePath(filePath)) {
+          logRooResponseEvent('rooResponse.visibleEditorsChanged', filePath);
+          break;
+        }
+      }
+    })
+  );
 
   return {
     getLlmDiagnostics: () => llmController?.getDiagnostics() ?? { lastPromptId: null, lastPromptLength: null }

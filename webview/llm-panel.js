@@ -1,4 +1,4 @@
-import { createEditor, $getRoot, $createParagraphNode } from 'lexical';
+import { createEditor, $getRoot, $createParagraphNode, $createTextNode } from 'lexical';
 import { registerRichText, HeadingNode, QuoteNode } from '@lexical/rich-text';
 import { ListNode, ListItemNode } from '@lexical/list';
 import { LinkNode } from '@lexical/link';
@@ -145,12 +145,16 @@ function renderResponsePreview(value) {
       const doc = parser.parseFromString(raw, 'text/html');
       const nodes = $generateNodesFromDOM(responseEditor, doc);
       if (nodes.length === 0) {
-        root.append($createParagraphNode());
+        const paragraph = $createParagraphNode();
+        paragraph.append($createTextNode(raw));
+        root.append(paragraph);
       } else {
         root.append(...nodes);
       }
     } catch (error) {
-      root.append($createParagraphNode());
+      const paragraph = $createParagraphNode();
+      paragraph.append($createTextNode(raw));
+      root.append(paragraph);
     }
   });
   updateResponseEmptyState();

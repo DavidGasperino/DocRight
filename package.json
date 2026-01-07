@@ -1,9 +1,15 @@
 {
-  "name": "llm-callouts-refactor",
-  "displayName": "LLM Callouts (Refactor)",
-  "description": "Refactored DocRight extension with clean architecture and tests.",
+  "name": "docright",
+  "displayName": "DocRight",
+  "description": "DocRight extension for structured document editing with scoped LLM callouts.",
   "version": "0.0.1",
-  "publisher": "local",
+  "publisher": "davidgasperino",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/DavidGasperino/DocRight.git"
+  },
+  "icon": "assets/docright-logo.png",
   "engines": {
     "vscode": "^1.80.0"
   },
@@ -12,17 +18,46 @@
   ],
   "main": "./out/extension.js",
   "activationEvents": [
+    "onView:docRight.quickstart",
     "onCommand:docRight.startSession",
+    "onCommand:docRight.startSessionNew",
+    "onCommand:docRight.startSessionResume",
     "onCommand:docRightRefactor.openLlmPanel",
     "onCommand:docRightRefactor.openEditor",
     "onCommand:docRightRefactor.setScopeSelection",
     "onCommand:docRightRefactor.setScopeFull"
   ],
   "contributes": {
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "docRight",
+          "title": "DocRight",
+          "icon": "assets/docright-logo.png"
+        }
+      ]
+    },
+    "views": {
+      "docRight": [
+        {
+          "id": "docRight.quickstart",
+          "name": "Quickstart",
+          "type": "webview"
+        }
+      ]
+    },
     "commands": [
       {
         "command": "docRight.startSession",
         "title": "DocRight: Start Session"
+      },
+      {
+        "command": "docRight.startSessionNew",
+        "title": "DocRight: Start New Session"
+      },
+      {
+        "command": "docRight.startSessionResume",
+        "title": "DocRight: Resume Session"
       },
       {
         "command": "docRightRefactor.openLlmPanel",
@@ -59,6 +94,7 @@
     "@lexical/link": "^0.11.1",
     "@lexical/list": "^0.11.1",
     "@lexical/mark": "^0.11.1",
+    "@lexical/markdown": "^0.11.1",
     "@lexical/rich-text": "^0.11.1",
     "@lexical/selection": "^0.11.1",
     "@lexical/table": "^0.11.1",

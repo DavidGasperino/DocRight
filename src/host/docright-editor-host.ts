@@ -226,6 +226,14 @@ export class DocRightEditorHost {
     return Boolean(this.panel && this.root === root);
   }
 
+  private getPreferredViewColumn(): vscode.ViewColumn {
+    const value = Number(this.settings.ui.columns.editor);
+    if (Number.isFinite(value) && value > 0) {
+      return value as vscode.ViewColumn;
+    }
+    return vscode.ViewColumn.One;
+  }
+
   async open(root: string): Promise<void> {
     if (this.panel && this.root && this.root !== root) {
       this.panel.dispose();
@@ -233,9 +241,10 @@ export class DocRightEditorHost {
 
     this.root = root;
     await this.loadProjectState(root);
+    const viewColumn = this.getPreferredViewColumn();
 
     if (this.panel) {
-      this.panel.reveal(vscode.ViewColumn.Beside, true);
+      this.panel.reveal(viewColumn, true);
       if (this.webviewReady) {
         await this.postDocRightState();
         this.postDocRightScope();
@@ -250,7 +259,7 @@ export class DocRightEditorHost {
     this.panel = vscode.window.createWebviewPanel(
       'docRightRefactor.editor',
       `DocRight Document (${vscode.workspace.name ?? 'Refactor'})`,
-      { viewColumn: vscode.ViewColumn.One, preserveFocus: false },
+      { viewColumn, preserveFocus: false },
       { enableScripts: true, retainContextWhenHidden: true }
     );
 
@@ -473,6 +482,21 @@ export class DocRightEditorHost {
         if (entry) {
           this.exportRequests.delete(message.requestId);
           entry.reject(new Error(message.message || 'DocRight export failed.'));
+        }
+        break;
+      }
+      case 'docright.copyMarkdown': {
+        try {
+          const fallbackText = message.text || message.html || '';
+          const clipboardText = message.markdown && message.markdown.trim().length > 0 ? message.markdown : fallbackText;
+          await vscode.env.clipboard.writeText(clipboardText);
+          this.postMessage({ type: 'docright.copyMarkdownResult', success: true });
+        } catch (error) {
+          this.postMessage({
+            type: 'docright.copyMarkdownResult',
+            success: false,
+            message: error instanceof Error ? error.message : 'Clipboard copy failed.'
+          });
         }
         break;
       }

@@ -77,3 +77,6 @@ flowchart LR
 ## Notes
 - The DocRight editor webview is bundled into `media/docright-editor.js`.
 - If the search bar does not appear, rebuild with `npm run compile` and reopen the editor panel.
+
+## License
+MIT

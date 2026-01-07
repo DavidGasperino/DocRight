@@ -21,6 +21,7 @@ import { DocRightEditorHost } from './docright-editor-host';
 import { type LlmPanelHost } from './llm-panel-host';
 import { promptSummaryBullets } from './iteration-summary';
 import { DocRightTimelinePanelHost } from './timeline-panel-host';
+import { appendDiagnosticsLog, captureTabGroups } from './ui-diagnostics';
 
 export class DocRightCalloutsHost {
   private panel: vscode.WebviewPanel | null = null;
@@ -65,8 +66,24 @@ export class DocRightCalloutsHost {
     this.refreshTimeline = handler;
   }
 
+  private getPreferredViewColumn(): vscode.ViewColumn {
+    const value = Number(this.settings.ui.columns.callouts);
+    if (Number.isFinite(value) && value > 0) {
+      return value as vscode.ViewColumn;
+    }
+    return vscode.ViewColumn.Two;
+  }
+
+  private getLlmViewColumn(): vscode.ViewColumn {
+    const value = Number(this.settings.ui.columns.llm);
+    if (Number.isFinite(value) && value > 0) {
+      return value as vscode.ViewColumn;
+    }
+    return vscode.ViewColumn.Three;
+  }
+
   async open(root: string, options?: { viewColumn?: vscode.ViewColumn; preserveFocus?: boolean }): Promise<void> {
-    const viewColumn = options?.viewColumn ?? vscode.ViewColumn.Two;
+    const viewColumn = options?.viewColumn ?? this.getPreferredViewColumn();
     const preserveFocus = options?.preserveFocus ?? true;
     this.root = root;
 
@@ -94,6 +111,14 @@ export class DocRightCalloutsHost {
     this.panel.webview.html = getCalloutsPanelHtml({
       cspSource: this.panel.webview.cspSource,
       scriptUri: scriptUri.toString()
+    });
+
+    this.panel.onDidChangeViewState((event) => {
+      this.logUiEvent('callouts.viewState', {
+        active: event.webviewPanel.active,
+        visible: event.webviewPanel.visible,
+        viewColumn: event.webviewPanel.viewColumn ?? null
+      });
     });
 
     this.panel.webview.onDidReceiveMessage(async (message) => {
@@ -455,6 +480,10 @@ export class DocRightCalloutsHost {
     if (!this.root) {
       return;
     }
+    this.logUiEvent('callouts.runLlm.start', {
+      llmViewColumn: this.llmPanelHost.getViewColumn(),
+      llmOpen: this.llmPanelHost.isOpen()
+    });
     const callouts = await loadDocRightCallouts(this.root);
     if (callouts.inline.length === 0 && callouts.overall.length === 0) {
       void vscode.window.showInformationMessage('Add at least one callout before generating a prompt.');
@@ -471,7 +500,24 @@ export class DocRightCalloutsHost {
     this.settings = await ensureSettingsFile(this.root);
     const prompt = await buildPromptPreview(this.root, this.settings, { html });
     this.llmPanelHost.setRoot(this.root);
-    await this.llmPanelHost.open(prompt, { viewColumn: vscode.ViewColumn.Three, preserveFocus: true });
+    await this.llmPanelHost.open(prompt, { viewColumn: this.getLlmViewColumn(), preserveFocus: true });
+    this.logUiEvent('callouts.runLlm.afterOpen', {
+      llmViewColumn: this.llmPanelHost.getViewColumn(),
+      llmOpen: this.llmPanelHost.isOpen()
+    });
+  }
+
+  private logUiEvent(event: string, extra?: Record<string, unknown>): void {
+    if (!this.root) {
+      return;
+    }
+    const payload = {
+      root: this.root,
+      calloutsViewColumn: this.panel?.viewColumn ?? null,
+      tabGroups: captureTabGroups(),
+      ...(extra ?? {})
+    };
+    void appendDiagnosticsLog(this.root, event, payload);
   }
 
   private async saveIteration(): Promise<void> {

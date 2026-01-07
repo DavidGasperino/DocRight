@@ -76,6 +76,12 @@ export type DocRightExportMessage = {
   inlineCallouts: DocRightInlineCalloutPayload[];
 };
 
+export type DocRightCopyMarkdownResultMessage = {
+  type: 'docright.copyMarkdownResult';
+  success: boolean;
+  message?: string;
+};
+
 export type DocRightToWebviewMessage =
   | DocRightLoadMessage
   | DocRightSavedMessage
@@ -87,7 +93,8 @@ export type DocRightToWebviewMessage =
   | DocRightRequestScopeSelectionMessage
   | DocRightSetScopeMessage
   | DocRightApplyScopeUpdateMessage
-  | DocRightExportMessage;
+  | DocRightExportMessage
+  | DocRightCopyMarkdownResultMessage;
 
 export type DocRightReadyMessage = {
   type: 'docright.ready';
@@ -143,6 +150,13 @@ export type DocRightExportErrorMessage = {
   message: string;
 };
 
+export type DocRightCopyMarkdownMessage = {
+  type: 'docright.copyMarkdown';
+  markdown: string;
+  html?: string;
+  text?: string;
+};
+
 export type DocRightFromWebviewMessage =
   | DocRightReadyMessage
   | DocRightUpdateMessage
@@ -154,7 +168,8 @@ export type DocRightFromWebviewMessage =
   | DocRightSelectionMessage
   | DocRightApplyScopeCompleteMessage
   | DocRightExportResultMessage
-  | DocRightExportErrorMessage;
+  | DocRightExportErrorMessage
+  | DocRightCopyMarkdownMessage;
 
 const docRightMessageTypes = new Set<DocRightFromWebviewMessage['type']>([
   'docright.ready',
@@ -167,7 +182,8 @@ const docRightMessageTypes = new Set<DocRightFromWebviewMessage['type']>([
   'docright.selection',
   'docright.applyScopeComplete',
   'docright.exportResult',
-  'docright.exportError'
+  'docright.exportError',
+  'docright.copyMarkdown'
 ]);
 
 export function isDocRightFromWebviewMessage(value: unknown): value is DocRightFromWebviewMessage {

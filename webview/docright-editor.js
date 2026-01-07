@@ -2,6 +2,7 @@ import {
   createEditor,
   $getRoot,
   $getNodeByKey,
+  $getNearestNodeFromDOMNode,
   $createParagraphNode,
   $getSelection,
   $isRangeSelection,
@@ -34,8 +35,26 @@ import {
 import { createEmptyHistoryState, registerHistory } from '@lexical/history';
 import { insertList, ListNode, ListItemNode } from '@lexical/list';
 import { toggleLink, LinkNode } from '@lexical/link';
-import { $createTableNodeWithDimensions, TableNode, TableRowNode, TableCellNode } from '@lexical/table';
-import { $setBlocksType } from '@lexical/selection';
+import {
+  $createTableNodeWithDimensions,
+  $getElementGridForTableNode,
+  $getTableCellNodeFromLexicalNode,
+  $getTableColumnIndexFromTableCellNode,
+  $getTableNodeFromLexicalNodeOrThrow,
+  $getTableRowIndexFromTableCellNode,
+  $getTableRowNodeFromTableCellNodeOrThrow,
+  $insertTableColumn,
+  $insertTableRow,
+  $removeTableRowAtIndex,
+  $deleteTableColumn,
+  $isTableCellNode,
+  $unmergeCell,
+  TableCellHeaderStates,
+  TableNode,
+  TableRowNode,
+  TableCellNode
+} from '@lexical/table';
+import { $setBlocksType, $patchStyleText } from '@lexical/selection';
 import {
   $wrapSelectionInMarkNode,
   $isMarkNode,
@@ -44,6 +63,7 @@ import {
   MarkNode
 } from '@lexical/mark';
 import { $generateHtmlFromNodes, $generateNodesFromDOM } from '@lexical/html';
+import { $convertToMarkdownString, TRANSFORMERS } from '@lexical/markdown';
 
 const vscode = acquireVsCodeApi();
 const editorElement = document.getElementById('editor');
@@ -104,6 +124,16 @@ const theme = {
 if (!editorElement) {
   setStatus('Editor element not found.');
 } else {
+  if (MarkNode && typeof MarkNode.prototype.excludeFromCopy === 'function') {
+    const originalExcludeFromCopy = MarkNode.prototype.excludeFromCopy;
+    MarkNode.prototype.excludeFromCopy = function (destination) {
+      if (destination === 'html') {
+        return false;
+      }
+      return originalExcludeFromCopy.call(this, destination);
+    };
+  }
+
   const editor = createEditor({
     namespace: 'DocRight',
     theme,
@@ -455,6 +485,228 @@ if (!editorElement) {
     });
   }
 
+  function promptForColor(label, fallback) {
+    const response = window.prompt(label + ' (hex or CSS). Leave blank to clear.', fallback);
+    if (response === null) {
+      return null;
+    }
+    return response.trim();
+  }
+
+  function getTableCellKeyFromDom(domNode) {
+    if (!(domNode instanceof Element)) {
+      return null;
+    }
+    const cell = domNode.closest('td, th');
+    if (!cell) {
+      return null;
+    }
+    let key = null;
+    editor.update(() => {
+      const nearest = $getNearestNodeFromDOMNode(cell);
+      if (!nearest) {
+        return;
+      }
+      const cellNode = $getTableCellNodeFromLexicalNode(nearest);
+      if (cellNode) {
+        key = cellNode.getKey();
+      }
+    }, { discrete: true });
+    return key;
+  }
+
+  function resolveTableCellFromSelection() {
+    const selection = $getSelection();
+    if (!$isRangeSelection(selection)) {
+      return null;
+    }
+    const anchorNode = selection.anchor.getNode();
+    return $getTableCellNodeFromLexicalNode(anchorNode);
+  }
+
+  function resolveTableCellFromKey(cellKey) {
+    if (cellKey) {
+      const node = $getNodeByKey(cellKey);
+      if ($isTableCellNode(node)) {
+        return node;
+      }
+      if (node) {
+        const cell = $getTableCellNodeFromLexicalNode(node);
+        if (cell) {
+          return cell;
+        }
+      }
+    }
+    return resolveTableCellFromSelection();
+  }
+
+  function resolveTableContext(cellKey) {
+    const cellNode = resolveTableCellFromKey(cellKey);
+    if (!cellNode) {
+      return null;
+    }
+    const tableNode = $getTableNodeFromLexicalNodeOrThrow(cellNode);
+    const grid = $getElementGridForTableNode(editor, tableNode);
+    return {
+      cellNode,
+      tableNode,
+      grid,
+      rowIndex: $getTableRowIndexFromTableCellNode(cellNode),
+      columnIndex: $getTableColumnIndexFromTableCellNode(cellNode)
+    };
+  }
+
+  function withTableContext(cellKey, handler) {
+    if (shouldBlockEditing()) {
+      return;
+    }
+    editor.update(() => {
+      const context = resolveTableContext(cellKey);
+      if (!context) {
+        setStatus('Place the cursor in a table cell to use table tools.');
+        return;
+      }
+      handler(context);
+    });
+  }
+
+  function toggleHeaderRow(context) {
+    const rowNode = $getTableRowNodeFromTableCellNodeOrThrow(context.cellNode);
+    const cells = rowNode.getChildren().filter((node) => $isTableCellNode(node));
+    const shouldEnable = cells.some((cell) => !cell.hasHeaderState(TableCellHeaderStates.ROW));
+    cells.forEach((cell) => {
+      const current = cell.getHeaderStyles();
+      const next = shouldEnable ? current | TableCellHeaderStates.ROW : current & ~TableCellHeaderStates.ROW;
+      cell.setHeaderStyles(next);
+    });
+  }
+
+  function toggleHeaderColumn(context) {
+    const { tableNode, grid, columnIndex } = context;
+    let shouldEnable = false;
+    for (let row = 0; row < grid.rows; row += 1) {
+      const cell = tableNode.getCellNodeFromCords(columnIndex, row, grid);
+      if (cell && !cell.hasHeaderState(TableCellHeaderStates.COLUMN)) {
+        shouldEnable = true;
+        break;
+      }
+    }
+    for (let row = 0; row < grid.rows; row += 1) {
+      const cell = tableNode.getCellNodeFromCords(columnIndex, row, grid);
+      if (!cell) {
+        continue;
+      }
+      const current = cell.getHeaderStyles();
+      const next = shouldEnable ? current | TableCellHeaderStates.COLUMN : current & ~TableCellHeaderStates.COLUMN;
+      cell.setHeaderStyles(next);
+    }
+  }
+
+  function setCellFillColor(cellKey) {
+    const color = promptForColor('Cell fill color', '#000000');
+    if (color === null) {
+      return;
+    }
+    const nextColor = color.length === 0 ? null : color;
+    withTableContext(cellKey, (context) => {
+      context.cellNode.setBackgroundColor(nextColor);
+    });
+  }
+
+  function setSelectionTextColor() {
+    const color = promptForColor('Text color', '#ffffff');
+    if (color === null) {
+      return;
+    }
+    const nextColor = color.length === 0 ? null : color;
+    editor.update(() => {
+      const selection = $getSelection();
+      if ($isRangeSelection(selection)) {
+        $patchStyleText(selection, { color: nextColor });
+      }
+    });
+  }
+
+  function copyHtmlViaSelection(html) {
+    if (!html) {
+      return false;
+    }
+    const helper = document.createElement('div');
+    helper.innerHTML = html;
+    helper.style.position = 'fixed';
+    helper.style.left = '-9999px';
+    helper.style.top = '0';
+    helper.style.opacity = '0';
+    helper.setAttribute('aria-hidden', 'true');
+    document.body.appendChild(helper);
+    const range = document.createRange();
+    range.selectNodeContents(helper);
+    const selection = window.getSelection();
+    if (!selection) {
+      document.body.removeChild(helper);
+      return false;
+    }
+    selection.removeAllRanges();
+    selection.addRange(range);
+    let success = false;
+    try {
+      success = document.execCommand('copy');
+    } catch (error) {
+      console.error(error);
+    }
+    selection.removeAllRanges();
+    document.body.removeChild(helper);
+    return success;
+  }
+
+  async function copyMarkdownToClipboard() {
+    let markdown = '';
+    let html = '';
+    let text = '';
+    editor.getEditorState().read(() => {
+      markdown = $convertToMarkdownString(TRANSFORMERS);
+      html = $generateHtmlFromNodes(editor, null);
+      text = $getRoot().getTextContent();
+    });
+    if (!markdown.trim()) {
+      markdown = text;
+    }
+    if (!text.trim()) {
+      text = markdown;
+    }
+
+    try {
+      if (navigator.clipboard && window.ClipboardItem) {
+        const mdBlob = new Blob([markdown], { type: 'text/markdown' });
+        const htmlBlob = new Blob([html], { type: 'text/html' });
+        const textBlob = new Blob([text], { type: 'text/plain' });
+        await navigator.clipboard.write([
+          new ClipboardItem({
+            'text/markdown': mdBlob,
+            'text/html': htmlBlob,
+            'text/plain': textBlob
+          })
+        ]);
+        setStatus('Copied to clipboard.');
+        return;
+      }
+      if (copyHtmlViaSelection(html)) {
+        setStatus('Copied to clipboard.');
+        return;
+      }
+      if (navigator.clipboard && navigator.clipboard.writeText) {
+        await navigator.clipboard.writeText(markdown);
+        setStatus('Copied to clipboard.');
+        return;
+      }
+    } catch (error) {
+      console.error(error);
+    }
+
+    vscode.postMessage({ type: 'docright.copyMarkdown', markdown, html, text });
+    setStatus('Copying to clipboard...');
+  }
+
   const actions = {
     undo: () => editor.dispatchCommand(UNDO_COMMAND, undefined),
     redo: () => editor.dispatchCommand(REDO_COMMAND, undefined),
@@ -480,7 +732,8 @@ if (!editorElement) {
       insertList(editor, 'number');
     },
     link: () => insertLink(),
-    table: () => insertTable()
+    table: () => insertTable(),
+    copyMarkdown: () => copyMarkdownToClipboard()
   };
 
   if (toolbar) {
@@ -498,6 +751,112 @@ if (!editorElement) {
       }
     });
   }
+
+
+  const RESIZE_MARGIN = 6;
+  const MIN_COLUMN_WIDTH = 60;
+  let resizeState = null;
+  let resizeFrame = null;
+  let resizeWidth = null;
+
+  function isNearCellEdge(cell, clientX) {
+    const rect = cell.getBoundingClientRect();
+    return Math.abs(clientX - rect.right) <= RESIZE_MARGIN;
+  }
+
+  function scheduleColumnResize(cellKey, width) {
+    resizeWidth = width;
+    if (resizeFrame) {
+      return;
+    }
+    resizeFrame = requestAnimationFrame(() => {
+      resizeFrame = null;
+      if (!resizeState || resizeWidth === null) {
+        return;
+      }
+      const nextWidth = resizeWidth;
+      editor.update(() => {
+        const context = resolveTableContext(resizeState.cellKey);
+        if (!context) {
+          return;
+        }
+        const { tableNode, grid, columnIndex } = context;
+        for (let row = 0; row < grid.rows; row += 1) {
+          const cell = tableNode.getCellNodeFromCords(columnIndex, row, grid);
+          if (cell) {
+            cell.setWidth(nextWidth);
+          }
+        }
+      });
+    });
+  }
+
+  function stopColumnResize() {
+    resizeState = null;
+    resizeWidth = null;
+    if (resizeFrame) {
+      cancelAnimationFrame(resizeFrame);
+      resizeFrame = null;
+    }
+    if (editorContainer) {
+      editorContainer.classList.remove('is-resizing');
+    }
+    window.removeEventListener('mousemove', onColumnResizeMove);
+    window.removeEventListener('mouseup', stopColumnResize);
+  }
+
+  function onColumnResizeMove(event) {
+    if (!resizeState) {
+      return;
+    }
+    const delta = event.clientX - resizeState.startX;
+    const nextWidth = Math.max(MIN_COLUMN_WIDTH, Math.round(resizeState.startWidth + delta));
+    scheduleColumnResize(resizeState.cellKey, nextWidth);
+  }
+
+  editorElement.addEventListener('mousemove', (event) => {
+    if (!editorContainer || resizeState) {
+      return;
+    }
+    const target = event.target;
+    if (!(target instanceof Element)) {
+      editorContainer.style.cursor = '';
+      return;
+    }
+    const cell = target.closest('td, th');
+    if (!cell) {
+      editorContainer.style.cursor = '';
+      return;
+    }
+    editorContainer.style.cursor = isNearCellEdge(cell, event.clientX) ? 'col-resize' : '';
+  });
+
+  editorElement.addEventListener('mousedown', (event) => {
+    if (event.button !== 0 || !editorContainer || shouldBlockEditing()) {
+      return;
+    }
+    const target = event.target;
+    if (!(target instanceof Element)) {
+      return;
+    }
+    const cell = target.closest('td, th');
+    if (!cell || !isNearCellEdge(cell, event.clientX)) {
+      return;
+    }
+    const cellKey = getTableCellKeyFromDom(cell);
+    if (!cellKey) {
+      return;
+    }
+    event.preventDefault();
+    resizeState = {
+      cellKey,
+      startX: event.clientX,
+      startWidth: cell.getBoundingClientRect().width
+    };
+    editorContainer.classList.add('is-resizing');
+    window.addEventListener('mousemove', onColumnResizeMove);
+    window.addEventListener('mouseup', stopColumnResize);
+  });
 
   function hideContextMenu() {
     if (contextMenu) {
@@ -780,14 +1139,21 @@ if (!editorElement) {
   }
 
   let pendingSelection = null;
+  let contextTableCellKey = null;
 
-  editorElement.addEventListener('contextmenu', (event) => {
+  function handleContextMenu(event) {
     if (!contextMenu) {
       return;
     }
+    if (!editorElement.contains(event.target)) {
+      return;
+    }
     event.preventDefault();
+    event.stopPropagation();
     reportFocus();
     pendingSelection = getSelectionPayload();
+    contextTableCellKey = getTableCellKeyFromDom(event.target);
+    contextMenu.dataset.table = contextTableCellKey ? 'true' : 'false';
     const inScope = pendingSelection ? pendingSelection.inScope !== false : false;
     const inlineBtn = contextMenu.querySelector('[data-action="inline"]');
     if (inlineBtn) {
@@ -807,7 +1173,9 @@ if (!editorElement) {
     }
     contextMenu.style.display = 'block';
     positionContextMenu(event.clientX, event.clientY);
-  });
+  }
+
+  document.addEventListener('contextmenu', handleContextMenu, true);
 
   if (contextMenu) {
     contextMenu.addEventListener('click', (event) => {
@@ -818,6 +1186,73 @@ if (!editorElement) {
       const action = button.getAttribute('data-action');
       if (action === 'cut' || action === 'copy' || action === 'paste') {
         document.execCommand(action);
+        hideContextMenu();
+        return;
+      }
+      if (action && action.startsWith('table-')) {
+        switch (action) {
+          case 'table-row-above':
+            withTableContext(contextTableCellKey, (context) => {
+              $insertTableRow(context.tableNode, context.rowIndex, false, 1, context.grid);
+            });
+            break;
+          case 'table-row-below':
+            withTableContext(contextTableCellKey, (context) => {
+              $insertTableRow(context.tableNode, context.rowIndex, true, 1, context.grid);
+            });
+            break;
+          case 'table-column-left':
+            withTableContext(contextTableCellKey, (context) => {
+              $insertTableColumn(context.tableNode, context.columnIndex, false, 1, context.grid);
+            });
+            break;
+          case 'table-column-right':
+            withTableContext(contextTableCellKey, (context) => {
+              $insertTableColumn(context.tableNode, context.columnIndex, true, 1, context.grid);
+            });
+            break;
+          case 'table-row-delete':
+            withTableContext(contextTableCellKey, (context) => {
+              if (context.grid.rows <= 1) {
+                context.tableNode.remove();
+                return;
+              }
+              $removeTableRowAtIndex(context.tableNode, context.rowIndex);
+            });
+            break;
+          case 'table-column-delete':
+            withTableContext(contextTableCellKey, (context) => {
+              if (context.grid.columns <= 1) {
+                context.tableNode.remove();
+                return;
+              }
+              $deleteTableColumn(context.tableNode, context.columnIndex);
+            });
+            break;
+          case 'table-toggle-header-row':
+            withTableContext(contextTableCellKey, (context) => {
+              toggleHeaderRow(context);
+            });
+            break;
+          case 'table-toggle-header-column':
+            withTableContext(contextTableCellKey, (context) => {
+              toggleHeaderColumn(context);
+            });
+            break;
+          case 'table-delete':
+            withTableContext(contextTableCellKey, (context) => {
+              context.tableNode.remove();
+            });
+            break;
+          case 'table-cell-fill':
+            setCellFillColor(contextTableCellKey);
+            break;
+          case 'table-text-color':
+            setSelectionTextColor();
+            break;
+          default:
+            break;
+        }
         hideContextMenu();
         return;
       }
@@ -963,7 +1398,7 @@ if (!editorElement) {
 
     const parser = new DOMParser();
     const doc = parser.parseFromString(html, 'text/html');
-    const marks = Array.from(doc.querySelectorAll('mark'));
+    const marks = Array.from(doc.querySelectorAll('mark, .dr-mark'));
     const instructionMap = new Map();
     if (Array.isArray(inlineCallouts)) {
       inlineCallouts.forEach((item) => {
@@ -980,14 +1415,14 @@ if (!editorElement) {
       }
       const edit = doc.createElement('llm-edit');
       edit.setAttribute('id', id);
+      while (mark.firstChild) {
+        edit.appendChild(mark.firstChild);
+      }
       const instruction = instructionMap.get(id);
       if (instruction) {
         const instructionEl = doc.createElement('instruction');
         instructionEl.textContent = instruction;
         edit.appendChild(instructionEl);
-      }
-      while (mark.firstChild) {
-        edit.appendChild(mark.firstChild);
       }
       mark.replaceWith(edit);
     });
@@ -1206,6 +1641,13 @@ if (!editorElement) {
             requestId: message.requestId,
             message: error.message || 'Failed to export DocRight HTML.'
           });
+        }
+        break;
+      case 'docright.copyMarkdownResult':
+        if (message.success) {
+          setStatus('Copied to clipboard.');
+        } else {
+          setStatus(message.message || 'Failed to copy to clipboard.');
         }
         break;
       default:

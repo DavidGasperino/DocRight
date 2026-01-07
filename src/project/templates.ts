@@ -11,8 +11,8 @@ export const DEFAULT_ITERATION_PREAMBLE = [
   '- Scope location: {{scope_location}}',
   '',
   'Instructions:',
-  '- Only return updated text for the scoped section.',
-  '- Do not rewrite the full document.'
+  '- Return the complete updated HTML for the scoped section (preserve unchanged markup).',
+  '- Output HTML only (no explanations); remove <llm-edit> wrappers.'
 ].join('\n');
 
 export const DEFAULT_CALLOUTS_STATE = {

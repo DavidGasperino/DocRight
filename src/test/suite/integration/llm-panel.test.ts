@@ -5,7 +5,7 @@ suite('integration: llm panel', () => {
   test('opens panel and receives prompt', async () => {
     assert.ok(vscode.workspace.workspaceFolders && vscode.workspace.workspaceFolders.length > 0, 'No workspace open for tests.');
 
-    const extension = vscode.extensions.getExtension('local.llm-callouts-refactor');
+    const extension = vscode.extensions.getExtension('davidgasperino.docright');
     assert.ok(extension, 'Refactor extension not found');
     const api = (await extension.activate()) as { getLlmDiagnostics: () => { lastPromptLength: number | null } };
 

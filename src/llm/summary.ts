@@ -32,12 +32,10 @@ export function extractDocRightSummary(raw: string): DocRightSummaryExtraction {
 
 export function buildDocRightSummaryInstructions(): string[] {
   return [
-    'After the HTML, append a summary block in this exact format:',
+    'After the HTML, append this summary block (outside the HTML):',
     DOC_RIGHT_SUMMARY_START,
     '- bullet 1',
-    '- bullet 2',
-    DOC_RIGHT_SUMMARY_END,
-    'Use 2-5 concise bullets and keep the summary outside the HTML output.'
+    DOC_RIGHT_SUMMARY_END
   ];
 }
 

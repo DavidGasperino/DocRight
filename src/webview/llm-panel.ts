@@ -12,7 +12,7 @@ export function getLlmPanelHtml(options: LlmPanelOptions): string {
   const csp = [
     "default-src 'none'",
     `img-src ${options.cspSource} data: https:`,
-    `style-src ${options.cspSource} 'nonce-${nonce}'`,
+    `style-src ${options.cspSource} 'nonce-${nonce}' 'unsafe-inline'`,
     `script-src ${options.cspSource} 'nonce-${nonce}'`
   ].join('; ');
 
@@ -236,7 +236,9 @@ export function getLlmPanelHtml(options: LlmPanelOptions): string {
       padding: 0 3px;
     }
     .dr-table {
-      width: 100%;
+      width: auto;
+      min-width: 100%;
+      table-layout: fixed;
       border-collapse: collapse;
       margin: 0 0 0.9em 0;
     }

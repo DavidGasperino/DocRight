@@ -8,6 +8,7 @@ import { type DocRightSettings } from '../settings/settings';
 import { type LlmController } from '../llm/controller';
 import { buildDocRightSummaryInstructions, extractDocRightSummary } from '../llm/summary';
 import { type Logger } from './logger';
+import { appendDiagnosticsLog } from './ui-diagnostics';
 
 type RooApi = {
   sidebarProvider?: unknown;
@@ -85,6 +86,7 @@ export class RooIntegration {
     const responsePath = this.getResponsePath(this.root);
     await ensureDir(path.dirname(responsePath));
     await fs.promises.writeFile(responsePath, '', 'utf8');
+    void appendDiagnosticsLog(this.root, 'roo.sendPrompt.writeEmpty', { responsePath });
     this.startWatcher(responsePath);
 
     const rooPrompt = this.buildRooPrompt(trimmedPrompt, responsePath, this.root);
@@ -124,15 +126,16 @@ export class RooIntegration {
   }
 
   private buildRooPrompt(basePrompt: string, responsePath: string, root: string): string {
-    const relativePath = this.toPosixPath(path.relative(root, responsePath));
     const absolutePath = this.toPosixPath(responsePath);
     const instructions = [
-      'Roo Code response instructions:',
-      `- Project root: ${this.toPosixPath(root)}`,
-      `- Write ONLY the updated HTML for the scoped section to: ${relativePath}`,
-      '- The output path is relative to the project root.',
-      `- Absolute path: ${absolutePath}`,
-      '- Use the absolute path when writing the file.',
+      'Roo Code response instructions (do this exactly):',
+      `- Write ONLY the updated HTML for the scoped section to: ${absolutePath}`,
+      '- Output the complete scoped HTML fragment (not a summary or single sentence).',
+      '- Preserve existing tags/classes/structure; only change the text required by callouts.',
+      '- Remove any <llm-edit> wrappers; keep their content in place with edits applied.',
+      '- The file must contain valid HTML (no plain text, no code fences).',
+      '- Use the write_file tool (or equivalent file-write action) to write the HTML.',
+      '- If your current mode cannot write files, switch to /code and then write the file.',
       '- Overwrite the file contents; no code fences or extra commentary.',
       '- Do not modify any other files.',
       '- Stop after writing the file.',
@@ -209,6 +212,9 @@ export class RooIntegration {
     this.responsePath = responsePath;
     this.lastContent = null;
     this.lastSummaryKey = null;
+    if (this.root) {
+      void appendDiagnosticsLog(this.root, 'roo.watch.start', { responsePath });
+    }
     try {
       const dir = path.dirname(responsePath);
       const fileName = path.basename(responsePath);
@@ -241,16 +247,25 @@ export class RooIntegration {
       const { cleaned, bullets } = extractDocRightSummary(raw);
       const content = cleaned.trim();
       const summaryKey = bullets.join('\n');
+      if (this.root) {
+        void appendDiagnosticsLog(this.root, 'roo.watch.read', {
+          responsePath: this.responsePath,
+          length: raw.length,
+          cleanedLength: content.length,
+          summaryCount: bullets.length
+        });
+      }
       if (!content || (content === this.lastContent && summaryKey === this.lastSummaryKey)) {
         return;
       }
       this.lastContent = content;
       this.lastSummaryKey = summaryKey;
       this.controller.setResponseWithSummary(content, bullets);
+      const looksLikeHtml = /<[^>]+>/.test(content);
       this.controller.updateState({
-        status: 'Roo response received',
+        status: looksLikeHtml ? 'Roo response received' : 'Roo response missing HTML',
         isRunning: false,
-        canApply: true
+        canApply: looksLikeHtml
       });
       await this.controller.postState();
     } catch (error) {
@@ -473,11 +488,41 @@ export class RooIntegration {
         return;
       }
       if (currentIndex < targetIndex) {
-        await vscode.commands.executeCommand('workbench.action.moveActiveEditorToRightGroup');
+        const moved = await this.tryMoveActiveEditor('right');
+        if (!moved) {
+          return;
+        }
       } else {
-        await vscode.commands.executeCommand('workbench.action.moveActiveEditorToLeftGroup');
+        const moved = await this.tryMoveActiveEditor('left');
+        if (!moved) {
+          return;
+        }
       }
     }
+  }
+
+  private async tryMoveActiveEditor(direction: 'left' | 'right'): Promise<boolean> {
+    const commands =
+      direction === 'right'
+        ? [
+            'workbench.action.moveEditorToRightGroup',
+            'workbench.action.moveActiveEditorToRightGroup',
+            'workbench.action.moveEditorToNextGroup'
+          ]
+        : [
+            'workbench.action.moveEditorToLeftGroup',
+            'workbench.action.moveActiveEditorToLeftGroup',
+            'workbench.action.moveEditorToPreviousGroup'
+          ];
+    for (const command of commands) {
+      try {
+        await vscode.commands.executeCommand(command);
+        return true;
+      } catch (error) {
+        // Try the next command if this one isn't available.
+      }
+    }
+    return false;
   }
 
   private hasEditorGroup(column: vscode.ViewColumn): boolean {
