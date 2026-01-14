@@ -105,17 +105,23 @@ export function getCalloutsPanelHtml(options: CalloutsPanelOptions): string {
       box-sizing: border-box;
     }
     button {
-      background: var(--vscode-button-background);
-      color: var(--vscode-button-foreground);
-      border: none;
+      background: transparent;
+      color: var(--vscode-button-background);
+      border: 1px solid var(--vscode-button-background);
       padding: 6px 10px;
       border-radius: 4px;
       cursor: pointer;
     }
     button.secondary {
       background: transparent;
-      border: 1px solid var(--vscode-button-background);
+      border-color: var(--vscode-button-background);
       color: var(--vscode-button-background);
+    }
+    button.is-active,
+    button:not(.list-item):active {
+      background: var(--vscode-button-background);
+      color: var(--vscode-button-foreground);
+      border-color: var(--vscode-button-background);
     }
     button:disabled {
       opacity: 0.5;
@@ -203,8 +209,8 @@ export function getCalloutsPanelHtml(options: CalloutsPanelOptions): string {
         <div class="section-body">
           <div id="scope-status" class="meta"></div>
           <div class="section-actions">
-            <button id="scope-unlock" class="secondary" type="button">Unlock</button>
-            <button id="scope-selection" class="secondary" type="button">Use Selection</button>
+            <button id="scope-unlock" class="secondary" type="button">Unlocked</button>
+            <button id="scope-selection" class="secondary" type="button">Selection</button>
             <button id="scope-full" class="secondary" type="button">Full Document</button>
           </div>
         </div>

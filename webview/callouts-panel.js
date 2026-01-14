@@ -175,7 +175,7 @@ function render() {
       if (!button) {
         return;
       }
-      button.classList.toggle('secondary', !isActive);
+      button.classList.toggle('is-active', isActive);
       button.setAttribute('aria-pressed', String(isActive));
     };
     setActive(scopeUnlockBtn, active === 'unlock');

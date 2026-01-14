@@ -60,17 +60,23 @@ export function getLlmPanelHtml(options: LlmPanelOptions): string {
       box-sizing: border-box;
     }
     button {
-      background: var(--vscode-button-background);
-      color: var(--vscode-button-foreground);
-      border: none;
+      background: transparent;
+      color: var(--vscode-button-background);
+      border: 1px solid var(--vscode-button-background);
       padding: 6px 10px;
       border-radius: 4px;
       cursor: pointer;
     }
     button.secondary {
       background: transparent;
-      border: 1px solid var(--vscode-button-background);
+      border-color: var(--vscode-button-background);
       color: var(--vscode-button-background);
+    }
+    button.is-active,
+    button:active {
+      background: var(--vscode-button-background);
+      color: var(--vscode-button-foreground);
+      border-color: var(--vscode-button-background);
     }
     button:disabled {
       opacity: 0.5;
