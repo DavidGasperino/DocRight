@@ -1,82 +1,47 @@
 # DocRight
 
-DocRight is a VS Code extension for structured document editing with scoped LLM callouts. It provides a rich-text editor, persistent project files, and a prompt pipeline that can apply edits to a selected scope of your document.
+DocRight is a VS Code extension for structured document editing with scoped LLM callouts. It provides a rich text editor, a callouts workflow that turns edits into structured instructions, and a safe apply step that only replaces the scoped range.
 
-## Features
-- Rich-text DocRight Document panel with tables, links, and inline formatting.
-- Scoped editing (full document or selection-based) to constrain LLM edits.
-- Inline and overall callouts that become structured edit instructions.
-- LLM panel that builds a DocRight prompt from document + callouts.
-- Search with highlighted matches and next/previous navigation.
+## How to use
+1) Command Palette -> DocRight: Start Session (creates .docright project files)
+2) Open panels:
+   - DocRight: Open Editor
+   - DocRight: Open LLM Panel
+3) Write in the DocRight Document.
+4) Add callouts:
+   - Inline callout: select text and add a callout
+   - Overall callout: describe a global change
+5) Lock scope:
+   - Use Selection for a specific range
+   - Full Document for global changes
+6) Generate prompt in the Callouts panel and send to Roo (or copy the prompt to your LLM).
+7) Review Response (preview) and Apply to DocRight to replace the scoped text.
+8) Save an iteration when needed.
 
-## Quick Start (Local Development)
-1) Open this folder in VS Code: `~/workspace/DocRight`
-2) Build:
+## Local development
+1) Install dependencies:
 ```
 eval "$(fnm env)"
 npm install
+```
+2) Build:
+```
 npm run compile
 ```
-3) Start the Extension Development Host: `F5`
-4) In the host window, run `DocRight: Start Session`
+3) Run the extension: press F5 and run `DocRight: Start Session` in the Extension Development Host.
 
-## Commands
-- `DocRight: Start Session` (creates a DocRight project if needed)
-- `DocRight: Open Editor`
-- `DocRight: Open LLM Panel`
-- `DocRight: Set Scope to Selection`
-- `DocRight: Set Scope to Full Document`
+## Common commands
+- DocRight: Start Session
+- DocRight: Open Editor
+- DocRight: Open LLM Panel
+- DocRight: Set Scope to Selection
+- DocRight: Set Scope to Full Document
 
-## User Flow (Document Session)
-```mermaid
-flowchart TD
-  A[Command Palette] --> B[DocRight: Start Session]
-  B --> C{DocRight project exists?}
-  C -- No --> D[Create .docright config + defaults]
-  C -- Yes --> E[Load settings + project state]
-  D --> E
-  E --> F[Open DocRight Document panel]
-  F --> G[Author content + add callouts]
-  G --> H[Set scope: full or selection]
-  H --> I[DocRight: Open LLM Panel]
-  I --> J[Run LLM prompt]
-  J --> K[Apply edits to scope]
-  K --> L[Autosave document + callouts]
+## Packaging
 ```
-
-## User Flow (Prompt Pipeline)
-```mermaid
-flowchart LR
-  A[DocRight Document] --> B[Export HTML]
-  C[Inline + Overall Callouts] --> D[Build XML]
-  E[Scope + Settings] --> D
-  B --> D
-  D --> F[Assemble Prompt]
-  F --> G[LLM Panel]
-  G --> H[User runs LLM]
-  H --> I[Apply changes to scope]
-  I --> A
+npm run compile
+npx @vscode/vsce package
 ```
-
-## Project Files
-- `.docright/settings.json` - user-editable settings.
-- `.docright/docright.json` - project config.
-- `.docright/prompts/` - prompt preambles.
-- `.docright/llm/` - LLM session metadata + last run.
-- `document.lexical.json` - document editor state.
-- `callouts.json` - inline + overall callouts.
-- `contexts.json` - saved context items.
-- `scope.json` - current scope selection.
-
-## Development Scripts
-- Build (includes webview bundle): `npm run compile`
-- Webview bundle only: `npm run build:docright`
-- Lint: `npm run lint`
-- Test: `npm test`
-
-## Notes
-- The DocRight editor webview is bundled into `media/docright-editor.js`.
-- If the search bar does not appear, rebuild with `npm run compile` and reopen the editor panel.
 
 ## License
 MIT

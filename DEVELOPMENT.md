@@ -1,215 +1,148 @@
 # DocRight Developer Guide
 
-This document is an internal developer reference for the DocRight VS Code extension. It is exhaustive by design and should not be packaged into the VSIX.
+This document is the primary developer reference for the DocRight VS Code extension. It is intended to help a new contributor understand the system quickly, run it locally, and make safe changes.
 
-## Purpose and Intent
-DocRight is a VS Code extension for structured document editing with scoped LLM callouts. It helps users:
-- Author a document in a rich-text editor panel (Lexical).
-- Add inline and overall callouts to drive targeted edits.
-- Generate a structured LLM prompt and apply changes to a specific scope.
-- Save and restore iterations with a git-like timeline.
-- Integrate with Roo Code to execute LLM tasks and ingest the result.
+## Purpose and product summary
+DocRight is a structured document editor with scoped LLM callouts. The product experience is:
+- Write or paste content into a rich text editor (Lexical).
+- Add inline and overall callouts to describe changes.
+- Lock a scope (selection or full document).
+- Generate a prompt, run an LLM, review the response.
+- Apply changes only inside the locked scope.
+- Save iterations for traceability.
 
-The extension prioritizes:
-- Clear separation of concerns (host logic vs. webviews vs. storage).
-- Safe, reproducible project state on disk (under `.docright/`).
-- A user flow that preserves context and allows rollback/forking.
+## Local setup
+Prerequisites:
+- Node.js and npm (use `fnm` if you work across versions).
+- VS Code.
 
-## High-Level Architecture
-The extension is organized into these layers:
+Install dependencies:
+```
+eval "$(fnm env)"
+npm install
+```
 
-1) Host layer (TypeScript in `src/host/`)
-   - Owns VS Code APIs, webview panels, commands, and integrations.
-   - Handles control flow and state synchronization.
+Build webviews and TypeScript:
+```
+npm run compile
+```
 
-2) Core and LLM layer (`src/core/`, `src/llm/`)
-   - Builds prompts, XML, summary extraction, and LLM state management.
+Run the extension:
+- Press F5 to launch the Extension Development Host.
+- In the host window, run `DocRight: Start Session`.
 
-3) Storage layer (`src/storage/`)
-   - Read/write project files under `.docright/`.
-   - Iterations snapshotting and restore.
+## Repo layout
+```
+src/
+  extension.ts                  VS Code entrypoint
+  host/                          VS Code adapters (panels, commands, Roo)
+  core/                          Pure logic (scope, prompt, XML)
+  storage/                       On-disk state IO
+  webview/                       Webview HTML wrappers and message types
+webview/                          Webview JS entrypoints (Lexical, UI)
+media/                            Bundled webview JS (build output)
+scripts/                          Build scripts
+```
 
-4) Webviews (`src/webview/` and bundled JS in `webview/`)
-   - HTML/CSS/JS for panels and UI interactions.
-   - Bundled into `media/` via `scripts/build-docright-editor.js`.
+Important note: the live webview logic is in `webview/*.js`. `npm run build:docright` bundles those files into `media/`.
 
-## Extension Entry Point
-File: `src/extension.ts`
+## Build pipeline
+- `npm run build:docright` bundles webview JS into `media/` via `scripts/build-docright-editor.js`.
+- `npm run compile` runs the webview bundle and TypeScript compilation.
 
-Key responsibilities:
-- Register commands (Start Session, Open Editor, Open LLM Panel, etc.).
-- Create and manage host instances (editor, callouts, LLM, Roo, timeline).
-- Register Quickstart view and Timeline provider.
-- Orchestrate session flow (new vs resume).
+## User flow (step-by-step)
+1) Start session: creates `.docright/` and project defaults.
+2) Editor opens: user writes in DocRight Document panel.
+3) Callouts:
+   - Inline callout: select text and add a callout.
+   - Overall callout: define a global instruction.
+4) Scope lock:
+   - Use Selection locks to a range (markers inserted in Lexical).
+   - Full Document locks to the whole document.
+5) Generate prompt in Callouts panel.
+6) LLM panel shows the prompt and receives response.
+7) Apply updates: response replaces only the locked scope.
+8) Save iteration: snapshot state in `.docright/iterations/`.
 
-### Commands
-Primary commands:
-- `DocRight: Start Session` (`docRight.startSession`)
-- `DocRight: Start New Session` (`docRight.startSessionNew`)
-- `DocRight: Resume Session` (`docRight.startSessionResume`)
-- `DocRight: Open Editor` (`docRightRefactor.openEditor`)
-- `DocRight: Open LLM Panel` (`docRightRefactor.openLlmPanel`)
-- `DocRight: Set Scope to Selection` (`docRightRefactor.setScopeSelection`)
-- `DocRight: Set Scope to Full Document` (`docRightRefactor.setScopeFull`)
-- `DocRight: Show Iteration Details` (`docRight.timeline.showDetails`)
+## Core data files
+At the workspace root:
+- `document.lexical.json` - Lexical editor state.
+- `callouts.json` - inline and overall callouts.
+- `contexts.json` - context items and active flags.
+- `scope.json` - current scope selection and markerId.
 
-Quickstart view is registered under `docRight.quickstart` and is a webview view container in the Activity Bar.
+Under `.docright/`:
+- `docright.json` - project metadata.
+- `settings.json` - user-editable settings.
+- `llm/roo_response.html` - last LLM response.
+- `iterations/` - snapshots and metadata.
 
-## Core User Flow
-1) Start Session:
-   - New: create `.docright/` with defaults.
-   - Resume: load existing project and state.
-2) Editor + Callouts panels open.
-3) User adds inline/overall callouts and optionally context files.
-4) Generate Prompt in Callouts panel:
-   - Builds XML prompt with scope + callouts + active contexts.
-5) LLM panel displays the prompt + receives response from Roo.
-6) Apply:
-   - Pre-apply iteration is auto-saved.
-   - Response is applied to the Lexical document.
-   - Callouts are cleared.
+## Scope mechanics
+- The webview captures a selection payload from Lexical.
+- It inserts hidden `ScopeMarkerNode` elements at selection boundaries.
+- The markerId is stored in `scope.json`.
+- The scope overlay uses DOM ranges derived from markers.
+- Apply reconstructs a selection from markers and replaces the range.
 
-## Panels and Webviews
+Key files:
+- `src/core/scope.ts` (serialized scope state)
+- `webview/docright-editor.js` (marker insertion, overlay, apply)
 
-### DocRight Editor Panel
-Host: `src/host/docright-editor-host.ts`
-Webview: `src/webview/docright-editor.ts` (bundled to `media/docright-editor.js`)
-Role:
-- Lexical editor for the document.
-- Applies scoped edits on request.
-- Syncs document state to `document.lexical.json`.
+## Prompt and LLM pipeline
+- Callouts are converted to XML (`src/core/callouts-xml.ts`).
+- Scope and context are embedded in the prompt (`src/core/prompt.ts`).
+- Roo integration watches `.docright/llm/roo_response.html` (`src/host/roo.ts`).
+- Summary bullets are extracted and stored (`src/llm/summary.ts`).
 
-### DocRight Callouts Panel
-Host: `src/host/callouts-panel-host.ts`
-Webview: `src/webview/callouts-panel.ts` (bundled to `media/callouts-panel.js`)
-Role:
-- Manage inline and overall callouts.
-- Manage context files with per-iteration activation checkboxes.
-- Generate prompt.
-- Save/restore iterations.
-- Launch Timeline popup.
+## Debugging
+- Extension Host logs: `View -> Output -> Extension Host`.
+- Webview console: `Developer: Open Webview Developer Tools`.
+- Scope/apply traces: `.docright/logs/ui-debug.log`.
+  - `docright.scope.trace` shows selection source and marker info.
+  - `docright.apply.trace` shows selection before/after removal.
 
-Notable behaviors:
-- Generate Prompt is disabled if there are no callouts.
-- Context Insert button is only enabled when the selected context is active.
-- Context checkboxes reset after Send to Roo or Apply.
+## Tests
+- Unit tests live under `src/test/suite/`.
+- Run all tests:
+```
+npm test
+```
 
-### DocRight LLM Panel
-Host: `src/host/llm-panel-host.ts`
-Webview: `src/webview/llm-panel.ts` (bundled to `media/llm-panel.js`)
-Role:
-- Display prompt and response.
-- Uses Lexical to render the response preview (read-only).
-- Send to Roo, Apply, Reject, Save Iteration.
+## Common tasks for contributors
+### Add a new webview message
+1) Update `src/webview/*-messages.ts` with the new message type.
+2) Handle it in the webview JS (`webview/*.js`).
+3) Handle it in the host (`src/host/*-host.ts`).
+4) Add logging if the workflow is user-visible.
 
-Reject clears the response preview and resets apply state.
+### Update editor behavior
+1) Edit `webview/docright-editor.js`.
+2) Run `npm run build:docright` or `npm run compile`.
+3) Reload the Extension Development Host.
 
-### Quickstart View
-Host: `src/host/quickstart-view.ts`
-View: `docRight.quickstart`
-Role:
-- Activity Bar entry point.
-- Buttons for Start Session and Resume Session.
+### Update prompt output
+1) Change `src/core/prompt.ts` or `src/core/callouts-xml.ts`.
+2) Run `npm run compile`.
 
-### Timeline Popup
-Host: `src/host/timeline-panel-host.ts`
-Webview: `src/webview/timeline-panel.ts` (bundled to `media/timeline-panel.js`)
-Role:
-- Git-like graph of iterations.
-- Hover tooltip shows the summary bullets and metadata.
-- Clicking a node opens a markdown details view.
+## Strengths and weaknesses
+Strengths:
+- Deterministic scoped replacements via marker-based ranges.
+- Clear separation between VS Code host and webview logic.
+- Persistent on-disk state that is easy to inspect and version.
 
-### Timeline Provider (Explorer Timeline)
-Host: `src/host/timeline.ts`
-Role:
-- Integrates with VS Code Timeline view (proposed API).
-- Requires `enabledApiProposals: ["timeline"]` and launch flag for dev/test.
-- Separate from Timeline popup (the popup is safe for normal installs).
-
-## LLM and Roo Integration
-
-### LLM Controller
-File: `src/llm/controller.ts`
-- Manages prompt/response state and sync to webview.
-- Tracks summary bullets extracted from the Roo response.
-- Clears summary on prompt changes.
-
-### Roo Integration
-File: `src/host/roo.ts`
-Flow:
-- `sendPrompt()` writes a blank `roo_response.html` file, starts a watcher.
-- Sends a structured prompt to Roo, including output instructions and summary block instructions.
-- Watches for the output file to update and parses the response.
-- Summary is extracted from HTML comments and removed from visible response.
-
-Mode switching:
-- Sends `/ask` to Roo before prompt, so Roo stays in Ask mode.
-
-### Summary Extraction
-Files: `src/llm/summary.ts`
-- Summary is embedded in the LLM output inside HTML comment markers.
-- Extracted, removed from response, and stored as iteration summary bullets.
-
-## Iterations and Timeline
-File: `src/storage/docright-iterations.ts`
-- Each iteration is a snapshot under `.docright/iterations/<id>/`.
-- Snapshots include document, callouts, scope, contexts, LLM session, and `roo_response.html`.
-- Metadata includes parent relationship and summary bullets.
-- State file `.docright/iterations/state.json` stores `headId`.
-
-Auto-save:
-- Triggered pre-apply (before changes are written to the document).
-Manual save:
-- Prompts user for summary bullets.
-
-## Context Files
-File: `src/storage/docright-contexts.ts`
-- Stored in `.docright/contexts.json`.
-- Each context has an `active` flag.
-- Only active contexts are included in the prompt XML.
-
-## Project Files
-Core files (workspace root):
-- `document.lexical.json`
-- `callouts.json`
-- `contexts.json`
-- `scope.json`
-
-DocRight metadata:
-- `.docright/docright.json`
-- `.docright/settings.json`
-- `.docright/llm/session.json`
-- `.docright/llm/roo_response.html`
-- `.docright/iterations/`
-
-## Build and Test
-Commands:
-- `npm run build:docright` (bundle webviews)
-- `npm run compile` (webviews + TypeScript)
-- `npm test`
-
-Proposed API:
-- Timeline provider requires `--enable-proposed-api davidgasperino.docright` for dev/test.
+Weaknesses:
+- Webview code is JS, so type safety is limited in the UI layer.
+- Scope logic is subtle and depends on Lexical behavior.
+- Timeline provider uses a proposed API that may require flags during dev.
 
 ## Packaging
-VSIX:
-- `npx @vscode/vsce package`
+```
+npm run compile
+npx @vscode/vsce package
+```
 
-Packaging exclusions:
-- `.vscodeignore` excludes dev-only files (source, tests, docs).
-
-## Debugging Tips
-- Extension host output: `View > Output > Extension Host`.
-- Webview logs: use `Developer: Open Webview Developer Tools`.
-- Roo output is written to `.docright/llm/roo_response.html`.
-
-## Common Issues
-- Missing search bar: rebuild with `npm run compile`.
-- Timeline view empty: open `document.lexical.json` and ensure iterations exist.
-- Roo response not updating: check watcher and output file path.
-
-## Release Checklist
+## Release checklist
 1) `npm run compile`
 2) `npm test`
 3) `npx @vscode/vsce package`
-4) Test VSIX in a clean VS Code window.
+4) Install the VSIX in a clean VS Code window and smoke-test the flow.
