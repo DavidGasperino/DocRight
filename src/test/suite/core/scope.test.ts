@@ -7,8 +7,10 @@ suite('scope', () => {
     const scope = normalizeDocRightScope(null);
     assert.strictEqual(scope.mode, 'full');
     assert.strictEqual(scope.selection, null);
-    assert.strictEqual(getScopeModeLabel(scope), 'full');
-    assert.strictEqual(getScopeLocation(scope), 'Full document.');
+    assert.strictEqual(scope.locked, false);
+    assert.strictEqual(scope.markerId, null);
+    assert.strictEqual(getScopeModeLabel(scope), 'unlocked');
+    assert.strictEqual(getScopeLocation(scope), 'No scope locked (editing enabled).');
   });
 
   test('normalize range with valid selection', () => {
@@ -22,11 +24,14 @@ suite('scope', () => {
         focusOffset: 2,
         focusType: 'text',
         isBackward: true
-      }
+      },
+      markerId: 'marker-1'
     });
 
     assert.strictEqual(scope.mode, 'range');
     assert.ok(scope.selection);
+    assert.strictEqual(scope.locked, true);
+    assert.strictEqual(scope.markerId, 'marker-1');
     assert.strictEqual(getScopeModeLabel(scope), 'selection');
     assert.strictEqual(getScopeLocation(scope), 'User-selected range in the document.');
   });
@@ -39,5 +44,7 @@ suite('scope', () => {
 
     assert.strictEqual(scope.mode, 'full');
     assert.strictEqual(scope.selection, null);
+    assert.strictEqual(scope.locked, false);
+    assert.strictEqual(scope.markerId, null);
   });
 });

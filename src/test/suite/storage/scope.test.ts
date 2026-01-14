@@ -13,6 +13,7 @@ suite('storage:scope', () => {
 
     assert.strictEqual(scope.mode, 'full');
     assert.strictEqual(scope.selection, null);
+    assert.strictEqual(scope.locked, false);
   });
 
   test('save then load returns normalized scope', async () => {
@@ -27,7 +28,9 @@ suite('storage:scope', () => {
         focusOffset: 1,
         focusType: 'text',
         isBackward: false
-      }
+      },
+      locked: true,
+      markerId: 'marker-1'
     };
 
     await saveDocRightScope(dir, scope);
@@ -35,5 +38,6 @@ suite('storage:scope', () => {
 
     assert.strictEqual(loaded.mode, 'range');
     assert.ok(loaded.selection);
+    assert.strictEqual(loaded.locked, true);
   });
 });

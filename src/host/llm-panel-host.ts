@@ -1,10 +1,10 @@
 import * as vscode from 'vscode';
 
 import { type DocRightSettings } from '../settings/settings';
-import { loadDocRightScope } from '../storage/docright-scope';
 import { saveDocRightIteration } from '../storage/docright-iterations';
 import { loadDocRightContexts, saveDocRightContexts } from '../storage/docright-contexts';
 import { getDocRightRooResponsePath } from '../storage/docright-paths';
+import { loadDocRightScope } from '../storage/docright-scope';
 import { LlmController } from '../llm/controller';
 import { extractDocRightSummary } from '../llm/summary';
 import { getLlmPanelHtml } from '../webview/llm-panel';
@@ -238,14 +238,28 @@ export class LlmPanelHost {
       void vscode.window.showErrorMessage('LLM response is empty.');
       return;
     }
+    const scopeState = await loadDocRightScope(root);
+    const hasHtmlTag = /<[^>]+>/.test(trimmed);
+    void appendDiagnosticsLog(root, 'llm.apply.start', {
+      responseLength: trimmed.length,
+      hasHtmlTag,
+      scope: {
+        mode: scopeState.mode,
+        locked: scopeState.locked,
+        markerId: scopeState.markerId ?? null
+      }
+    });
+    if (scopeState.locked === false) {
+      void vscode.window.showErrorMessage('Lock scope before applying changes.');
+      return;
+    }
 
     try {
       const llmState = this.controller.getStateSnapshot();
-      const scope = await loadDocRightScope(root);
       if (llmState.autoSaveIteration) {
         await this.saveIteration('pre-apply');
       }
-      await this.editorHost.applyScopeUpdate(trimmed, scope);
+      await this.editorHost.applyScopeUpdate(trimmed, { useActiveScope: true });
       await this.editorHost.clearCallouts();
       await this.resetContextSelections();
       this.refreshCallouts?.();
@@ -256,8 +270,17 @@ export class LlmPanelHost {
         isRunning: false
       });
       await this.controller.postState();
+      void appendDiagnosticsLog(root, 'llm.apply.complete', {
+        responseLength: trimmed.length,
+        hasHtmlTag
+      });
     } catch (error) {
       const messageText = error instanceof Error ? error.message : 'Failed to apply LLM response.';
+      void appendDiagnosticsLog(root, 'llm.apply.error', {
+        responseLength: trimmed.length,
+        hasHtmlTag,
+        message: messageText
+      });
       void vscode.window.showErrorMessage(messageText);
     }
   }

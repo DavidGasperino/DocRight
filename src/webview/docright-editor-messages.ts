@@ -56,6 +56,7 @@ export type DocRightClearInlineCalloutsMessage = {
 
 export type DocRightRequestScopeSelectionMessage = {
   type: 'docright.requestScopeSelection';
+  selection?: DocRightSelectionPayload | null;
 };
 
 export type DocRightSetScopeMessage = {
@@ -67,6 +68,7 @@ export type DocRightApplyScopeUpdateMessage = {
   type: 'docright.applyScopeUpdate';
   requestId: number;
   scope: DocRightScopeState | null;
+  useActiveScope?: boolean;
   html: string;
 };
 
@@ -74,6 +76,8 @@ export type DocRightExportMessage = {
   type: 'docright.export';
   requestId: number;
   inlineCallouts: DocRightInlineCalloutPayload[];
+  scope?: DocRightScopeState | null;
+  useActiveScope?: boolean;
 };
 
 export type DocRightCopyMarkdownResultMessage = {
@@ -122,6 +126,7 @@ export type DocRightRequestOverallCalloutMessage = {
 export type DocRightScopeSelectionMessage = {
   type: 'docright.scopeSelection';
   selection: DocRightSelectionPayload;
+  markerId?: string | null;
 };
 
 export type DocRightScopeInvalidMessage = {
@@ -133,9 +138,33 @@ export type DocRightSelectionMessage = {
   id: string | null;
 };
 
+export type DocRightSelectionPayloadMessage = {
+  type: 'docright.selectionPayload';
+  selection: DocRightSelectionPayload | null;
+};
+
 export type DocRightApplyScopeCompleteMessage = {
   type: 'docright.applyScopeComplete';
   requestId: number;
+  resolution?: string;
+};
+
+export type DocRightApplyScopeErrorMessage = {
+  type: 'docright.applyScopeError';
+  requestId: number;
+  message: string;
+};
+
+export type DocRightApplyTraceMessage = {
+  type: 'docright.applyTrace';
+  stage: string;
+  detail: Record<string, unknown>;
+};
+
+export type DocRightScopeTraceMessage = {
+  type: 'docright.scopeTrace';
+  stage: string;
+  detail: Record<string, unknown>;
 };
 
 export type DocRightExportResultMessage = {
@@ -166,7 +195,11 @@ export type DocRightFromWebviewMessage =
   | DocRightScopeSelectionMessage
   | DocRightScopeInvalidMessage
   | DocRightSelectionMessage
+  | DocRightSelectionPayloadMessage
   | DocRightApplyScopeCompleteMessage
+  | DocRightApplyScopeErrorMessage
+  | DocRightApplyTraceMessage
+  | DocRightScopeTraceMessage
   | DocRightExportResultMessage
   | DocRightExportErrorMessage
   | DocRightCopyMarkdownMessage;
@@ -180,7 +213,11 @@ const docRightMessageTypes = new Set<DocRightFromWebviewMessage['type']>([
   'docright.scopeSelection',
   'docright.scopeInvalid',
   'docright.selection',
+  'docright.selectionPayload',
   'docright.applyScopeComplete',
+  'docright.applyScopeError',
+  'docright.applyTrace',
+  'docright.scopeTrace',
   'docright.exportResult',
   'docright.exportError',
   'docright.copyMarkdown'

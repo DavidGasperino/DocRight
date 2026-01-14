@@ -26,7 +26,9 @@ export const DEFAULT_CONTEXTS_STATE = {
 
 export const DEFAULT_SCOPE_STATE = {
   mode: 'full',
-  selection: null as null
+  selection: null as null,
+  locked: false,
+  markerId: null as null | string
 };
 
 export const DEFAULT_LLM_SESSION = {

@@ -4,6 +4,9 @@ import {
   $getNodeByKey,
   $getNearestNodeFromDOMNode,
   $createParagraphNode,
+  $createTextNode,
+  $isTextNode,
+  ElementNode,
   $getSelection,
   $isRangeSelection,
   $createRangeSelection,
@@ -77,7 +80,7 @@ const searchPrevButton = document.getElementById('docright-search-prev');
 const searchNextButton = document.getElementById('docright-search-next');
 const searchCount = document.getElementById('docright-search-count');
 
-let scopeState = { mode: 'full', selection: null };
+let scopeState = { mode: 'full', selection: null, locked: false, markerId: null };
 let searchState = {
   query: '',
   matches: [],
@@ -121,6 +124,108 @@ const theme = {
   markOverlap: 'dr-mark-overlap'
 };
 
+const SCOPE_MARKER_KIND_START = 'start';
+const SCOPE_MARKER_KIND_END = 'end';
+
+class ScopeMarkerNode extends ElementNode {
+  __markerId;
+  __markerKind;
+
+  static getType() {
+    return 'docright-scope-marker';
+  }
+
+  static clone(node) {
+    return new ScopeMarkerNode(node.__markerId, node.__markerKind, node.__key);
+  }
+
+  constructor(markerId, markerKind, key) {
+    super(key);
+    this.__markerId = markerId;
+    this.__markerKind = markerKind;
+  }
+
+  getMarkerId() {
+    return this.__markerId;
+  }
+
+  getMarkerKind() {
+    return this.__markerKind;
+  }
+
+  createDOM() {
+    const element = document.createElement('span');
+    element.dataset.docrightScope = this.__markerKind;
+    element.dataset.docrightScopeId = this.__markerId;
+    element.style.display = 'none';
+    element.setAttribute('aria-hidden', 'true');
+    return element;
+  }
+
+  updateDOM(prev, dom) {
+    if (prev.__markerKind !== this.__markerKind) {
+      dom.dataset.docrightScope = this.__markerKind;
+    }
+    if (prev.__markerId !== this.__markerId) {
+      dom.dataset.docrightScopeId = this.__markerId;
+    }
+    return false;
+  }
+
+  exportJSON() {
+    const base = super.exportJSON();
+    return {
+      ...base,
+      type: 'docright-scope-marker',
+      version: 1,
+      markerId: this.__markerId,
+      markerKind: this.__markerKind
+    };
+  }
+
+  static importJSON(serialized) {
+    const node = new ScopeMarkerNode(serialized.markerId, serialized.markerKind);
+    if (typeof serialized.format === 'number') {
+      node.setFormat(serialized.format);
+    }
+    if (typeof serialized.indent === 'number') {
+      node.setIndent(serialized.indent);
+    }
+    if (typeof serialized.direction === 'string') {
+      node.setDirection(serialized.direction);
+    }
+    return node;
+  }
+
+  exportDOM() {
+    const element = document.createElement('span');
+    element.setAttribute('data-docright-scope', this.__markerKind);
+    element.setAttribute('data-docright-scope-id', this.__markerId);
+    element.style.display = 'none';
+    return { element };
+  }
+
+  isInline() {
+    return true;
+  }
+
+  isIsolated() {
+    return true;
+  }
+
+  canBeEmpty() {
+    return true;
+  }
+}
+
+function $createScopeMarkerNode(markerId, markerKind) {
+  return new ScopeMarkerNode(markerId, markerKind);
+}
+
+function $isScopeMarkerNode(node) {
+  return node instanceof ScopeMarkerNode;
+}
+
 if (!editorElement) {
   setStatus('Editor element not found.');
 } else {
@@ -137,7 +242,18 @@ if (!editorElement) {
   const editor = createEditor({
     namespace: 'DocRight',
     theme,
-    nodes: [HeadingNode, QuoteNode, ListNode, ListItemNode, LinkNode, TableNode, TableRowNode, TableCellNode, MarkNode],
+    nodes: [
+      HeadingNode,
+      QuoteNode,
+      ListNode,
+      ListItemNode,
+      LinkNode,
+      TableNode,
+      TableRowNode,
+      TableCellNode,
+      MarkNode,
+      ScopeMarkerNode
+    ],
     onError(error) {
       console.error(error);
       setStatus('Lexical error - see console.');
@@ -292,14 +408,12 @@ if (!editorElement) {
       return;
     }
 
-    const containerRect = editorContainer.getBoundingClientRect();
-    const scrollLeft = editorContainer.scrollLeft;
-    const scrollTop = editorContainer.scrollTop;
+    const overlayRect = searchOverlay.getBoundingClientRect();
     rects.forEach(({ rect, isCurrent }) => {
       const highlight = document.createElement('div');
       highlight.className = 'dr-search-highlight' + (isCurrent ? ' dr-search-highlight-current' : '');
-      highlight.style.left = rect.left - containerRect.left + scrollLeft + 'px';
-      highlight.style.top = rect.top - containerRect.top + scrollTop + 'px';
+      highlight.style.left = rect.left - overlayRect.left + 'px';
+      highlight.style.top = rect.top - overlayRect.top + 'px';
       highlight.style.width = rect.width + 'px';
       highlight.style.height = rect.height + 'px';
       searchOverlay.appendChild(highlight);
@@ -865,12 +979,18 @@ if (!editorElement) {
   }
 
   function normalizeScopeState(nextScope) {
+    const hasLocked = nextScope && typeof nextScope.locked === 'boolean';
+    const locked =
+      hasLocked && typeof nextScope.locked === 'boolean'
+        ? nextScope.locked
+        : Boolean(nextScope && nextScope.mode === 'range' && nextScope.selection);
+    const markerId = nextScope && typeof nextScope.markerId === 'string' ? nextScope.markerId : null;
     if (!nextScope || nextScope.mode !== 'range' || !nextScope.selection) {
-      return { mode: 'full', selection: null };
+      return { mode: 'full', selection: null, locked, markerId: null };
     }
     const selection = nextScope.selection;
     if (!selection.anchorKey || !selection.focusKey) {
-      return { mode: 'full', selection: null };
+      return { mode: 'full', selection: null, locked, markerId: null };
     }
     return {
       mode: 'range',
@@ -882,7 +1002,9 @@ if (!editorElement) {
         focusOffset: Number.isFinite(selection.focusOffset) ? selection.focusOffset : 0,
         focusType: selection.focusType || 'text',
         isBackward: Boolean(selection.isBackward)
-      }
+      },
+      locked,
+      markerId
     };
   }
 
@@ -893,6 +1015,107 @@ if (!editorElement) {
     return { start, end };
   }
 
+  function createScopeMarkerId() {
+    return `scope-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+  }
+
+  function collectScopeMarkers(node, results) {
+    if ($isScopeMarkerNode(node)) {
+      results.push(node);
+      return;
+    }
+    if (node.getChildren) {
+      const children = node.getChildren();
+      for (const child of children) {
+        collectScopeMarkers(child, results);
+      }
+    }
+  }
+
+  function removeScopeMarkers(markerId) {
+    const markers = [];
+    collectScopeMarkers($getRoot(), markers);
+    markers.forEach((node) => {
+      if (!markerId || node.getMarkerId() === markerId) {
+        node.remove();
+      }
+    });
+  }
+
+  function findScopeMarkerNodes(markerId) {
+    const markers = [];
+    collectScopeMarkers($getRoot(), markers);
+    let start = null;
+    let end = null;
+    markers.forEach((node) => {
+      if (markerId && node.getMarkerId() !== markerId) {
+        return;
+      }
+      const kind = node.getMarkerKind();
+      if (kind === SCOPE_MARKER_KIND_START && !start) {
+        start = node;
+      }
+      if (kind === SCOPE_MARKER_KIND_END && !end) {
+        end = node;
+      }
+    });
+    return { start, end };
+  }
+
+  function getNodeIndexWithinParent(node) {
+    const parent = node.getParent();
+    if (!parent) {
+      return null;
+    }
+    let index = -1;
+    if (typeof node.getIndexWithinParent === 'function') {
+      index = node.getIndexWithinParent();
+    }
+    if (!Number.isFinite(index) || index < 0) {
+      const children = parent.getChildren ? parent.getChildren() : [];
+      index = children.indexOf(node);
+    }
+    if (index < 0) {
+      return null;
+    }
+    return { parent, index };
+  }
+
+  function createPointAfterNode(node) {
+    const info = getNodeIndexWithinParent(node);
+    if (!info) {
+      return null;
+    }
+    return { key: info.parent.getKey(), offset: info.index + 1, type: 'element' };
+  }
+
+  function createPointBeforeNode(node) {
+    const info = getNodeIndexWithinParent(node);
+    if (!info) {
+      return null;
+    }
+    return { key: info.parent.getKey(), offset: info.index, type: 'element' };
+  }
+
+  function buildScopeRangeFromMarkers(markerId) {
+    if (!markerId) {
+      return null;
+    }
+    const { start, end } = findScopeMarkerNodes(markerId);
+    if (!start || !end) {
+      return null;
+    }
+    const startPoint = createPointAfterNode(start);
+    const endPoint = createPointBeforeNode(end);
+    if (!startPoint || !endPoint) {
+      return null;
+    }
+    const range = $createRangeSelection();
+    range.anchor.set(startPoint.key, startPoint.offset, startPoint.type);
+    range.focus.set(endPoint.key, endPoint.offset, endPoint.type);
+    return range;
+  }
+
   function isPointBeforeOrEqual(a, b) {
     if (typeof a.is === 'function' && a.is(b)) {
       return true;
@@ -900,11 +1123,17 @@ if (!editorElement) {
     return a.isBefore(b);
   }
 
-  function buildScopeRange() {
-    if (scopeState.mode !== 'range' || !scopeState.selection) {
+  function buildScopeRangeFromState(state) {
+    if (!state || state.mode !== 'range') {
       return null;
     }
-    const selection = scopeState.selection;
+    if (state.markerId) {
+      return buildScopeRangeFromMarkers(state.markerId);
+    }
+    if (!state.selection) {
+      return null;
+    }
+    const selection = state.selection;
     const anchorNode = $getNodeByKey(selection.anchorKey);
     const focusNode = $getNodeByKey(selection.focusKey);
     if (!anchorNode || !focusNode) {
@@ -916,8 +1145,12 @@ if (!editorElement) {
     return range;
   }
 
+  function buildScopeRange() {
+    return buildScopeRangeFromState(scopeState);
+  }
+
   function isSelectionWithinScope(selection) {
-    if (scopeState.mode !== 'range' || !scopeState.selection) {
+    if (!scopeState.locked || scopeState.mode !== 'range' || !scopeState.selection) {
       return true;
     }
     if (!$isRangeSelection(selection)) {
@@ -936,10 +1169,20 @@ if (!editorElement) {
   }
 
   function applyScopeState(nextScope) {
+    const previousMarkerId = scopeState.markerId;
     scopeState = normalizeScopeState(nextScope);
-    if (scopeState.mode !== 'range') {
+    editor.setEditable(!scopeState.locked);
+    if (!scopeState.locked || scopeState.mode !== 'range') {
+      editor.update(() => {
+        removeScopeMarkers();
+      });
       clearScopeOverlay();
-      return;
+      return true;
+    }
+    if (previousMarkerId && previousMarkerId !== scopeState.markerId) {
+      editor.update(() => {
+        removeScopeMarkers(previousMarkerId);
+      });
     }
     let isValid = true;
     editor.getEditorState().read(() => {
@@ -949,31 +1192,25 @@ if (!editorElement) {
       }
     });
     if (!isValid) {
-      scopeState = { mode: 'full', selection: null };
+      scopeState = { mode: 'full', selection: null, locked: false, markerId: null };
+      editor.setEditable(true);
+      editor.update(() => {
+        removeScopeMarkers();
+      });
       clearScopeOverlay();
       vscode.postMessage({ type: 'docright.scopeInvalid' });
-      return;
+      return false;
     }
     scheduleScopeOverlayUpdate();
+    return true;
   }
 
   function shouldBlockEditing() {
-    if (scopeState.mode !== 'range') {
+    if (!scopeState.locked) {
       return false;
     }
-    let blocked = false;
-    editor.getEditorState().read(() => {
-      const selection = $getSelection();
-      if (!$isRangeSelection(selection)) {
-        blocked = true;
-        return;
-      }
-      blocked = !isSelectionWithinScope(selection);
-    });
-    if (blocked) {
-      setStatus('Editing locked outside scope.');
-    }
-    return blocked;
+    setStatus('Editing locked. Click Unlock to edit.');
+    return true;
   }
 
   function registerScopeBlock(command) {
@@ -1033,39 +1270,88 @@ if (!editorElement) {
     return range;
   }
 
+  function buildDomRangeFromMarkers(markerId) {
+    if (!markerId || !editorElement) {
+      return null;
+    }
+    const startMarker = editorElement.querySelector(
+      `[data-docright-scope-id="${markerId}"][data-docright-scope="${SCOPE_MARKER_KIND_START}"]`
+    );
+    const endMarker = editorElement.querySelector(
+      `[data-docright-scope-id="${markerId}"][data-docright-scope="${SCOPE_MARKER_KIND_END}"]`
+    );
+    if (!startMarker || !endMarker) {
+      return null;
+    }
+    const range = document.createRange();
+    try {
+      range.setStartAfter(startMarker);
+      range.setEndBefore(endMarker);
+    } catch (error) {
+      console.error(error);
+      return null;
+    }
+    if (range.collapsed) {
+      return null;
+    }
+    return range;
+  }
+
   function updateScopeOverlay() {
     if (!scopeOverlay || !editorContainer) {
       return;
     }
-    if (scopeState.mode !== 'range' || !scopeState.selection) {
+    if (!scopeState.locked || scopeState.mode !== 'range' || !scopeState.selection) {
       clearScopeOverlay();
       return;
     }
     let rect = null;
     editor.getEditorState().read(() => {
-      const scopeRange = buildScopeRange();
-      if (!scopeRange) {
-        rect = null;
-        return;
-      }
-      const domRange = buildDomRangeFromSelection(scopeRange);
+      const scopeRange = scopeState.markerId ? null : buildScopeRange();
+      const domRange = scopeState.markerId
+        ? buildDomRangeFromMarkers(scopeState.markerId)
+        : scopeRange
+          ? buildDomRangeFromSelection(scopeRange)
+          : null;
       if (!domRange) {
         rect = null;
         return;
       }
-      rect = domRange.getBoundingClientRect();
+      const rects = Array.from(domRange.getClientRects()).filter((item) => item.width > 0 && item.height > 0);
+      if (rects.length === 0) {
+        rect = null;
+        return;
+      }
+      rect = rects.reduce(
+        (acc, item) => ({
+          left: Math.min(acc.left, item.left),
+          top: Math.min(acc.top, item.top),
+          right: Math.max(acc.right, item.right),
+          bottom: Math.max(acc.bottom, item.bottom),
+          width: 0,
+          height: 0
+        }),
+        {
+          left: rects[0].left,
+          top: rects[0].top,
+          right: rects[0].right,
+          bottom: rects[0].bottom,
+          width: 0,
+          height: 0
+        }
+      );
+      rect.width = rect.right - rect.left;
+      rect.height = rect.bottom - rect.top;
     });
     clearScopeOverlay();
     if (!rect || rect.width <= 0 || rect.height <= 0) {
       return;
     }
-    const containerRect = editorContainer.getBoundingClientRect();
-    const scrollLeft = editorContainer.scrollLeft;
-    const scrollTop = editorContainer.scrollTop;
+    const overlayRect = scopeOverlay.getBoundingClientRect();
     const highlight = document.createElement('div');
     highlight.className = 'dr-scope-highlight';
-    highlight.style.left = rect.left - containerRect.left + scrollLeft + 'px';
-    highlight.style.top = rect.top - containerRect.top + scrollTop + 'px';
+    highlight.style.left = rect.left - overlayRect.left + 'px';
+    highlight.style.top = rect.top - overlayRect.top + 'px';
     highlight.style.width = rect.width + 'px';
     highlight.style.height = rect.height + 'px';
     scopeOverlay.appendChild(highlight);
@@ -1096,26 +1382,115 @@ if (!editorElement) {
     return false;
   }
 
+  function buildSelectionPayload(selection) {
+    if (!$isRangeSelection(selection)) {
+      return null;
+    }
+    return {
+      anchorKey: selection.anchor.key,
+      anchorOffset: selection.anchor.offset,
+      anchorType: selection.anchor.type,
+      focusKey: selection.focus.key,
+      focusOffset: selection.focus.offset,
+      focusType: selection.focus.type,
+      isBackward: selection.isBackward(),
+      isCollapsed: selection.isCollapsed(),
+      text: selection.getTextContent(),
+      overlapsCallout: selectionHasCallout(selection),
+      inScope: isSelectionWithinScope(selection)
+    };
+  }
+
+  function buildRangeSelectionFromPayload(payload) {
+    if (!payload) {
+      return null;
+    }
+    const range = $createRangeSelection();
+    range.anchor.set(payload.anchorKey, payload.anchorOffset, payload.anchorType || 'text');
+    range.focus.set(payload.focusKey, payload.focusOffset, payload.focusType || 'text');
+    return range;
+  }
+
+  function insertMarkerAtPoint(point, markerNode) {
+    if (!point || !markerNode) {
+      return false;
+    }
+    const target = $getNodeByKey(point.key);
+    if (!target) {
+      return false;
+    }
+    if (point.type === 'text' && $isTextNode(target)) {
+      const textNode = target;
+      const size = textNode.getTextContentSize();
+      if (point.offset <= 0) {
+        textNode.insertBefore(markerNode);
+        return true;
+      }
+      if (point.offset >= size) {
+        textNode.insertAfter(markerNode);
+        return true;
+      }
+      const splitNodes = textNode.splitText(point.offset);
+      const rightNode = splitNodes[1];
+      if (rightNode) {
+        rightNode.insertBefore(markerNode);
+        return true;
+      }
+      return false;
+    }
+    if (point.type === 'element' && typeof target.getChildren === 'function') {
+      const children = target.getChildren();
+      const offset = Math.max(0, Math.min(point.offset, children.length));
+      if (children.length === 0) {
+        target.append(markerNode);
+        return true;
+      }
+      if (offset === 0) {
+        children[0].insertBefore(markerNode);
+        return true;
+      }
+      if (offset >= children.length) {
+        children[children.length - 1].insertAfter(markerNode);
+        return true;
+      }
+      children[offset].insertBefore(markerNode);
+      return true;
+    }
+    return false;
+  }
+
+  function insertScopeMarkersForRange(range) {
+    if (!range) {
+      return null;
+    }
+    const { start, end } = getRangeEndpoints(range);
+    const markerId = createScopeMarkerId();
+    const startPoint = { key: start.key, offset: start.offset, type: start.type };
+    const endPoint = { key: end.key, offset: end.offset, type: end.type };
+    removeScopeMarkers();
+    const endInserted = insertMarkerAtPoint(endPoint, $createScopeMarkerNode(markerId, SCOPE_MARKER_KIND_END));
+    const startInserted = insertMarkerAtPoint(startPoint, $createScopeMarkerNode(markerId, SCOPE_MARKER_KIND_START));
+    if (!endInserted || !startInserted) {
+      removeScopeMarkers(markerId);
+      return null;
+    }
+    return markerId;
+  }
+
+  function insertScopeMarkersForSelection(payload) {
+    const range = buildRangeSelectionFromPayload(payload);
+    return insertScopeMarkersForRange(range);
+  }
+
+  function isMeaningfulSelection(payload) {
+    return Boolean(payload && !payload.isCollapsed && payload.text && payload.text.trim());
+  }
+
   function getSelectionPayload() {
     let payload = null;
     editor.getEditorState().read(() => {
       const selection = $getSelection();
-      if (!$isRangeSelection(selection)) {
-        return;
-      }
-      payload = {
-        anchorKey: selection.anchor.key,
-        anchorOffset: selection.anchor.offset,
-        anchorType: selection.anchor.type,
-        focusKey: selection.focus.key,
-        focusOffset: selection.focus.offset,
-        focusType: selection.focus.type,
-        isBackward: selection.isBackward(),
-        isCollapsed: selection.isCollapsed(),
-        text: selection.getTextContent(),
-        overlapsCallout: selectionHasCallout(selection),
-        inScope: isSelectionWithinScope(selection)
-      };
+      payload = buildSelectionPayload(selection);
     });
     return payload;
   }
@@ -1139,6 +1514,7 @@ if (!editorElement) {
   }
 
   let pendingSelection = null;
+  let lastScopeSelection = null;
   let contextTableCellKey = null;
 
   function handleContextMenu(event) {
@@ -1154,22 +1530,23 @@ if (!editorElement) {
     pendingSelection = getSelectionPayload();
     contextTableCellKey = getTableCellKeyFromDom(event.target);
     contextMenu.dataset.table = contextTableCellKey ? 'true' : 'false';
+    const isLocked = scopeState.locked === true;
     const inScope = pendingSelection ? pendingSelection.inScope !== false : false;
     const inlineBtn = contextMenu.querySelector('[data-action="inline"]');
     if (inlineBtn) {
-      inlineBtn.disabled = !pendingSelection || pendingSelection.overlapsCallout || !inScope;
+      inlineBtn.disabled = !isLocked || !pendingSelection || pendingSelection.overlapsCallout || !inScope;
     }
     const overallBtn = contextMenu.querySelector('[data-action="overall"]');
     if (overallBtn) {
-      overallBtn.disabled = !pendingSelection || !inScope;
+      overallBtn.disabled = !isLocked || !pendingSelection || !inScope;
     }
     const cutBtn = contextMenu.querySelector('[data-action="cut"]');
     if (cutBtn) {
-      cutBtn.disabled = scopeState.mode === 'range' && !inScope;
+      cutBtn.disabled = isLocked || (scopeState.mode === 'range' && !inScope);
     }
     const pasteBtn = contextMenu.querySelector('[data-action="paste"]');
     if (pasteBtn) {
-      pasteBtn.disabled = scopeState.mode === 'range' && !inScope;
+      pasteBtn.disabled = isLocked || (scopeState.mode === 'range' && !inScope);
     }
     contextMenu.style.display = 'block';
     positionContextMenu(event.clientX, event.clientY);
@@ -1387,17 +1764,74 @@ if (!editorElement) {
     }
   }
 
-  function buildHtmlWithCallouts(inlineCallouts) {
+  function collectMarkIdsInSelection(selection, ids) {
+    const seen = new Set();
+    const nodes = selection.getNodes();
+    for (const node of nodes) {
+      let current = node;
+      while (current) {
+        if ($isMarkNode(current)) {
+          const nodeIds = current.getIDs();
+          if (nodeIds && nodeIds.length > 0) {
+            const id = nodeIds[0];
+            if (!seen.has(id)) {
+              seen.add(id);
+              ids.push(id);
+            }
+          }
+          break;
+        }
+        current = current.getParent();
+      }
+    }
+  }
+
+  function buildHtmlWithCallouts(inlineCallouts, scopeOverride, options) {
     let html = '';
     let orderedIds = [];
-    editor.getEditorState().read(() => {
+    let errorMessage = '';
+    let usedSelectionPayload = null;
+    editor.update(() => {
       orderedIds = [];
+      const normalizedScope = scopeOverride ? normalizeScopeState(scopeOverride) : null;
+      if (normalizedScope && normalizedScope.mode === 'range' && normalizedScope.selection) {
+        let scopeRange = buildScopeRangeFromState(normalizedScope);
+        if (!scopeRange && options && options.fallbackToSelection && !normalizedScope.markerId) {
+          const currentSelection = $getSelection();
+          const currentPayload = buildSelectionPayload(currentSelection);
+          let fallbackPayload = isMeaningfulSelection(currentPayload) ? currentPayload : null;
+          if (!fallbackPayload && isMeaningfulSelection(lastScopeSelection)) {
+            fallbackPayload = lastScopeSelection;
+          }
+          if (fallbackPayload) {
+            scopeRange = buildScopeRangeFromState({ mode: 'range', selection: fallbackPayload });
+            if (scopeRange) {
+              usedSelectionPayload = fallbackPayload;
+            }
+          }
+        }
+        if (!scopeRange) {
+          errorMessage = 'Scope selection is no longer valid.';
+          return;
+        }
+        const payload = buildSelectionPayload(scopeRange);
+        if (payload) {
+          usedSelectionPayload = payload;
+        }
+        collectMarkIdsInSelection(scopeRange, orderedIds);
+        html = $generateHtmlFromNodes(editor, scopeRange);
+        return;
+      }
       collectMarkIds($getRoot(), orderedIds);
       html = $generateHtmlFromNodes(editor, null);
     });
+    if (errorMessage) {
+      throw new Error(errorMessage);
+    }
 
     const parser = new DOMParser();
     const doc = parser.parseFromString(html, 'text/html');
+    doc.querySelectorAll('[data-docright-scope]').forEach((node) => node.remove());
     const marks = Array.from(doc.querySelectorAll('mark, .dr-mark'));
     const instructionMap = new Map();
     if (Array.isArray(inlineCallouts)) {
@@ -1436,7 +1870,7 @@ if (!editorElement) {
         .replace(/&amp;/g, '&');
       return '<instruction>' + restored + '</instruction>';
     });
-    return output;
+    return { html: output, scopeSelection: usedSelectionPayload };
   }
 
 
@@ -1465,41 +1899,266 @@ if (!editorElement) {
     });
   }
 
-  function applyHtmlToScope(html) {
+  function stripSummaryBlock(value) {
+    return String(value || '').replace(/<!--DOCRIGHT_SUMMARY_START-->[\s\S]*?<!--DOCRIGHT_SUMMARY_END-->/gi, '');
+  }
+
+  function decodeHtmlIfEscaped(value) {
+    const text = String(value || '');
+    if (!text.includes('&lt;') && !text.includes('&gt;')) {
+      return text;
+    }
+    const textarea = document.createElement('textarea');
+    textarea.innerHTML = text;
+    return textarea.value;
+  }
+
+function stripCdata(value) {
+  const text = String(value || '').trim();
+  const match = text.match(/<!\[CDATA\[([\s\S]*?)\]\]>/i);
+  if (!match) {
+    return text;
+  }
+  return String(match[1] || '').trim();
+}
+
+function ensureBlockHtml(value) {
+  const text = String(value || '').trim();
+  if (!text) {
+    return text;
+  }
+  const parser = new DOMParser();
+  const doc = parser.parseFromString(text, 'text/html');
+  const hasBlock = Boolean(
+    doc.body.querySelector('p, h1, h2, h3, h4, h5, h6, ul, ol, table, blockquote, pre, div')
+  );
+  if (hasBlock) {
+    return text;
+  }
+  const inner = doc.body.innerHTML.trim();
+  if (!inner) {
+    return text;
+  }
+  return `<p>${inner}</p>`;
+}
+
+function stripTags(value) {
+  return String(value || '').replace(/<[^>]+>/g, '').trim();
+}
+
+function extractHtmlFragment(raw) {
+  let cleaned = stripSummaryBlock(raw);
+    const bodyMatch = String(cleaned).match(/<llm-body[^>]*>([\s\S]*?)<\/llm-body>/i);
+  if (bodyMatch) {
+    cleaned = bodyMatch[1];
+  }
+  cleaned = stripCdata(cleaned);
+  cleaned = decodeHtmlIfEscaped(cleaned);
+  cleaned = ensureBlockHtml(cleaned);
+  return String(cleaned || '').trim();
+}
+
+  function unwrapDocRightMarkers(doc) {
+    doc.querySelectorAll('llm-edit').forEach((node) => {
+      const fragment = doc.createDocumentFragment();
+      while (node.firstChild) {
+        fragment.appendChild(node.firstChild);
+      }
+      node.replaceWith(fragment);
+    });
+    doc.querySelectorAll('instruction').forEach((node) => node.remove());
+  }
+
+  function parseIncomingHtml(raw) {
+    const cleaned = extractHtmlFragment(raw);
+    const parser = new DOMParser();
+    const dom = parser.parseFromString(cleaned, 'text/html');
+    unwrapDocRightMarkers(dom);
+    return { cleaned, dom };
+  }
+
+  function postApplyTrace(stage, detail) {
+    try {
+      vscode.postMessage({ type: 'docright.applyTrace', stage, detail });
+    } catch (error) {
+      // ignore logging failures
+    }
+  }
+
+  function postScopeTrace(stage, detail) {
+    try {
+      vscode.postMessage({ type: 'docright.scopeTrace', stage, detail });
+    } catch (error) {
+      // ignore logging failures
+    }
+  }
+
+  function buildRangeSelectionFromDomRange(domRange) {
+    if (!domRange) {
+      return null;
+    }
+    const range = $createRangeSelection();
+    try {
+      range.applyDOMRange(domRange);
+      return range;
+    } catch (error) {
+      console.error(error);
+      return null;
+    }
+  }
+
+  function applyHtmlToScope(html, options) {
+    let applied = true;
+    lastApplyResolution = '';
+    const requireScope = options && options.requireScope === true;
+    const scopeOverride = options && options.scope ? normalizeScopeState(options.scope) : null;
     editor.update(() => {
-      const dom = new DOMParser().parseFromString(html || '', 'text/html');
-      const nodes = $generateNodesFromDOM(editor, dom);
-      if (scopeState.mode === 'range' && scopeState.selection) {
-        const scopeRange = buildScopeRange();
+      const { cleaned, dom } = parseIncomingHtml(html);
+      let nodes = [];
+      try {
+        nodes = $generateNodesFromDOM(editor, dom);
+        if (nodes.length === 0) {
+          const hasBlock = Boolean(
+            dom.body.querySelector('p, h1, h2, h3, h4, h5, h6, ul, ol, table, blockquote, pre, div')
+          );
+          if (!hasBlock && cleaned.includes('<')) {
+            const parser = new DOMParser();
+            const wrapped = parser.parseFromString(`<p>${cleaned}</p>`, 'text/html');
+            nodes = $generateNodesFromDOM(editor, wrapped);
+          }
+        }
+      } catch (error) {
+        nodes = [];
+      }
+      const fallbackText = (dom.body && dom.body.textContent ? dom.body.textContent : cleaned).trim();
+      const safeFallbackText = fallbackText || stripTags(cleaned);
+      const activeScope = scopeOverride || scopeState;
+      if (activeScope.mode === 'range' && activeScope.selection) {
+        const usesMarkers = Boolean(activeScope.markerId);
+        lastApplyResolution = usesMarkers ? 'markers' : 'selection';
+        const domRange = usesMarkers ? buildDomRangeFromMarkers(activeScope.markerId) : null;
+        let scopeRange = usesMarkers ? buildRangeSelectionFromDomRange(domRange) : null;
         if (!scopeRange) {
+          scopeRange = buildScopeRangeFromState(activeScope);
+        }
+        if (scopeRange && $isRangeSelection(scopeRange)) {
+          const anchorNode = scopeRange.anchor.getNode();
+          const focusNode = scopeRange.focus.getNode();
+          const anchorBlock = anchorNode.getTopLevelElementOrThrow();
+          const focusBlock = focusNode.getTopLevelElementOrThrow();
+          const isSingleBlock = anchorBlock.is(focusBlock);
+          const isParagraph =
+            typeof anchorBlock.getType === 'function' && anchorBlock.getType() === 'paragraph';
+          if (isSingleBlock && isParagraph && nodes.length === 1) {
+            const firstNode = nodes[0];
+            if (firstNode && typeof firstNode.getType === 'function' && firstNode.getType() === 'paragraph') {
+              const inlineNodes = firstNode.getChildren ? firstNode.getChildren() : [];
+              if (inlineNodes.length > 0) {
+                nodes = inlineNodes;
+              }
+            }
+          }
+        }
+        if (!scopeRange || scopeRange.isCollapsed()) {
+          lastApplyResolution = usesMarkers ? 'markers-missing' : 'selection-missing';
+          applied = false;
           return;
         }
         $setSelection(scopeRange);
-        if (nodes.length === 0) {
-          scopeRange.insertText('');
-        } else {
-          scopeRange.insertNodes(nodes);
+        const selection = $getSelection();
+        if (!$isRangeSelection(selection)) {
+          applied = false;
+          return;
         }
-        scopeRange.selectEnd();
+        if (selection.isCollapsed()) {
+          lastApplyResolution = usesMarkers ? 'markers-collapsed' : 'selection-collapsed';
+          applied = false;
+          return;
+        }
+        postApplyTrace('before-remove', {
+          markerId: activeScope.markerId || null,
+          selectionLength: selection.getTextContent().length,
+          selectionPreview: selection.getTextContent().slice(0, 160),
+          anchorType: selection.anchor.type,
+          focusType: selection.focus.type,
+          anchorOffset: selection.anchor.offset,
+          focusOffset: selection.focus.offset,
+          domRangeLength: domRange ? domRange.toString().length : null,
+          domRangeCollapsed: domRange ? domRange.collapsed : null,
+          nodesLength: nodes.length
+        });
+        selection.removeText();
+        const insertionSelection = $getSelection();
+        if (!$isRangeSelection(insertionSelection)) {
+          applied = false;
+          return;
+        }
+        postApplyTrace('after-remove', {
+          markerId: activeScope.markerId || null,
+          selectionLength: insertionSelection.getTextContent().length,
+          selectionPreview: insertionSelection.getTextContent().slice(0, 160),
+          anchorType: insertionSelection.anchor.type,
+          focusType: insertionSelection.focus.type,
+          anchorOffset: insertionSelection.anchor.offset,
+          focusOffset: insertionSelection.focus.offset,
+          nodesLength: nodes.length
+        });
+        let inserted = false;
+        if (nodes.length === 0) {
+          insertionSelection.insertText(safeFallbackText || '');
+          inserted = true;
+        } else {
+          try {
+            insertionSelection.insertNodes(nodes);
+            inserted = true;
+          } catch (error) {
+            inserted = false;
+          }
+          if (!inserted && safeFallbackText) {
+            insertionSelection.insertText(safeFallbackText);
+            inserted = true;
+          }
+        }
+        if (!inserted) {
+          lastApplyResolution = usesMarkers ? 'markers-insert-failed' : 'selection-insert-failed';
+          applied = false;
+          return;
+        }
+      } else if (requireScope) {
+        lastApplyResolution = 'scope-required';
+        applied = false;
+        return;
       } else {
+        lastApplyResolution = 'full';
         const root = $getRoot();
         root.clear();
         if (nodes.length === 0) {
-          root.append($createParagraphNode());
+          if (safeFallbackText) {
+            const paragraph = $createParagraphNode();
+            paragraph.append($createTextNode(safeFallbackText));
+            root.append(paragraph);
+          } else {
+            root.append($createParagraphNode());
+          }
         } else {
           root.append(...nodes);
         }
         root.selectEnd();
       }
     });
-    scheduleScopeOverlayUpdate();
+    if (applied) {
+      scheduleScopeOverlayUpdate();
+    }
+    return applied;
   }
 
   let lastSelectionId = null;
+  let lastApplyResolution = '';
   editor.registerCommand(
     SELECTION_CHANGE_COMMAND,
     () => {
       let nextId = null;
+      let nextScopeSelection = null;
       editor.getEditorState().read(() => {
         const selection = $getSelection();
         if (!$isRangeSelection(selection)) {
@@ -1510,7 +2169,15 @@ if (!editorElement) {
         if (ids && ids.length > 0) {
           nextId = ids[0];
         }
+        const payload = buildSelectionPayload(selection);
+        if (isMeaningfulSelection(payload)) {
+          nextScopeSelection = payload;
+        }
       });
+      if (nextScopeSelection) {
+        lastScopeSelection = nextScopeSelection;
+        vscode.postMessage({ type: 'docright.selectionPayload', selection: nextScopeSelection });
+      }
       if (nextId !== lastSelectionId) {
         lastSelectionId = nextId;
         vscode.postMessage({ type: 'docright.selection', id: nextId });
@@ -1609,31 +2276,150 @@ if (!editorElement) {
         applyScopeState(message.scope);
         break;
       case 'docright.requestScopeSelection':
-        vscode.postMessage({
-          type: 'docright.scopeSelection',
-          selection: getSelectionPayload()
-        });
+        {
+          let scopeSelection = null;
+          let markerId = null;
+          let selectionSource = 'none';
+          let payloadLength = 0;
+          let lastLength = 0;
+          let overrideLength = 0;
+          let chosenLength = 0;
+          let chosenPreview = null;
+          let chosenAnchorType = null;
+          let chosenFocusType = null;
+          let chosenBackward = null;
+          let nextScopeState = null;
+          editor.update(() => {
+            const selection = $getSelection();
+            const payload = buildSelectionPayload(selection);
+            const hasPayload = isMeaningfulSelection(payload);
+            const override = isMeaningfulSelection(message.selection) ? message.selection : null;
+            const lastSnapshot = isMeaningfulSelection(lastScopeSelection) ? lastScopeSelection : null;
+            payloadLength = payload && payload.text ? payload.text.length : 0;
+            overrideLength = override && override.text ? override.text.length : 0;
+            lastLength = lastSnapshot && lastSnapshot.text ? lastSnapshot.text.length : 0;
+            if (hasPayload) {
+              scopeSelection = payload;
+              selectionSource = 'current';
+            } else if (lastSnapshot) {
+              scopeSelection = lastSnapshot;
+              selectionSource = 'last';
+            } else if (override) {
+              scopeSelection = override;
+              selectionSource = 'override';
+            }
+            if (!isMeaningfulSelection(scopeSelection)) {
+              return;
+            }
+            chosenLength = scopeSelection.text ? scopeSelection.text.length : 0;
+            chosenPreview = scopeSelection.text ? scopeSelection.text.slice(0, 160) : null;
+            chosenAnchorType = scopeSelection.anchorType || null;
+            chosenFocusType = scopeSelection.focusType || null;
+            chosenBackward = scopeSelection.isBackward;
+            if (selectionSource === 'current' && $isRangeSelection(selection)) {
+              markerId = insertScopeMarkersForRange(selection);
+              return;
+            }
+            markerId = insertScopeMarkersForSelection(scopeSelection);
+            if (markerId) {
+              nextScopeState = {
+                mode: 'range',
+                selection: {
+                  anchorKey: scopeSelection.anchorKey,
+                  anchorOffset: scopeSelection.anchorOffset,
+                  anchorType: scopeSelection.anchorType || 'text',
+                  focusKey: scopeSelection.focusKey,
+                  focusOffset: scopeSelection.focusOffset,
+                  focusType: scopeSelection.focusType || 'text',
+                  isBackward: Boolean(scopeSelection.isBackward)
+                },
+                locked: true,
+                markerId
+              };
+            }
+          });
+          postScopeTrace('request', {
+            selectionSource,
+            payloadLength,
+            lastLength,
+            overrideLength,
+            chosenLength,
+            chosenPreview,
+            chosenAnchorType,
+            chosenFocusType,
+            chosenBackward,
+            markerId
+          });
+          if (markerId) {
+            setStatus('Scope locked (markers).');
+            if (nextScopeState) {
+              applyScopeState(nextScopeState);
+            }
+          } else if (scopeSelection) {
+            setStatus('Failed to lock scope (markers).');
+          }
+          vscode.postMessage({
+            type: 'docright.scopeSelection',
+            selection: scopeSelection,
+            markerId
+          });
+        }
         break;
       case 'docright.clearInlineCallouts':
         clearAllInlineCallouts();
         break;
       case 'docright.applyScopeUpdate':
-        if (message.scope) {
-          applyScopeState(message.scope);
+        {
+          const activeScope = message.useActiveScope ? scopeState : message.scope;
+          const requiresScope = activeScope && activeScope.mode === 'range';
+          if (!message.useActiveScope && message.scope) {
+            const scopeValid = applyScopeState(message.scope);
+            if (requiresScope && !scopeValid) {
+              const errorMessage = 'Scope selection is no longer valid. Reselect scope and try again.';
+              setStatus(errorMessage);
+              vscode.postMessage({
+                type: 'docright.applyScopeError',
+                requestId: message.requestId,
+                message: errorMessage
+              });
+              break;
+            }
+          }
+          const applied = applyHtmlToScope(message.html || '', { requireScope: requiresScope, scope: activeScope });
+          if (!applied) {
+            const detail = lastApplyResolution ? ` (${lastApplyResolution})` : '';
+            const errorMessage = `Scope selection is no longer valid${detail}. Reselect scope and try again.`;
+            setStatus(errorMessage);
+            vscode.postMessage({
+              type: 'docright.applyScopeError',
+              requestId: message.requestId,
+              message: errorMessage
+            });
+            break;
+          }
+          if (lastApplyResolution) {
+            setStatus(`Applied (${lastApplyResolution}).`);
+          } else {
+            setStatus('Applied.');
+          }
+          vscode.postMessage({
+            type: 'docright.applyScopeComplete',
+            requestId: message.requestId,
+            resolution: lastApplyResolution || null
+          });
         }
-        applyHtmlToScope(message.html || '');
-        vscode.postMessage({
-          type: 'docright.applyScopeComplete',
-          requestId: message.requestId
-        });
         break;
       case 'docright.export':
         try {
-          const html = buildHtmlWithCallouts(message.inlineCallouts);
+          const activeScope = message.useActiveScope ? scopeState : message.scope;
+          const result = buildHtmlWithCallouts(message.inlineCallouts, activeScope, { fallbackToSelection: true });
+          if (result.scopeSelection && activeScope && activeScope.mode === 'range' && !activeScope.markerId) {
+            vscode.postMessage({ type: 'docright.scopeSelection', selection: result.scopeSelection });
+          }
           vscode.postMessage({
             type: 'docright.exportResult',
             requestId: message.requestId,
-            html
+            html: result.html
           });
         } catch (error) {
           vscode.postMessage({

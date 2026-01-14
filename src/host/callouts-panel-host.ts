@@ -196,6 +196,9 @@ export class DocRightCalloutsHost {
       case 'setScopeFull':
         await this.editorHost.setScopeToFull();
         break;
+      case 'setScopeUnlock':
+        await this.editorHost.setScopeUnlock();
+        break;
       case 'runLlm':
         await this.runLlm();
         break;
@@ -304,7 +307,7 @@ export class DocRightCalloutsHost {
       inlineCallouts,
       selectedOverallId: this.selectedOverallId,
       selectedInlineId: this.selectedInlineId,
-      scope: { supported: true, mode: scopeState.mode },
+      scope: { supported: true, mode: scopeState.mode, locked: scopeState.locked },
       llm: {
         supported: true,
         status: llmState.status || 'Idle',
@@ -492,9 +495,13 @@ export class DocRightCalloutsHost {
     let html = '';
     if (this.editorHost.isOpenForRoot(this.root)) {
       try {
-        html = await this.editorHost.requestHtmlExport();
+        html = await this.editorHost.requestHtmlExport({ useActiveScope: true });
       } catch (error) {
         this.logger.debug('Failed to export editor HTML for LLM prompt', error);
+        void vscode.window.showErrorMessage(
+          error instanceof Error ? error.message : 'Failed to export the document for prompt generation.'
+        );
+        return;
       }
     }
     this.settings = await ensureSettingsFile(this.root);

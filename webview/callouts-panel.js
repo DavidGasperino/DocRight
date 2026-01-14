@@ -6,6 +6,7 @@ const calloutsSectionsEl = document.getElementById('callouts-sections');
 
 const scopeSectionEl = document.getElementById('scope-section');
 const scopeStatusEl = document.getElementById('scope-status');
+const scopeUnlockBtn = document.getElementById('scope-unlock');
 const scopeSelectionBtn = document.getElementById('scope-selection');
 const scopeFullBtn = document.getElementById('scope-full');
 
@@ -162,10 +163,31 @@ function render() {
 
   if (state.scope && state.scope.supported) {
     scopeSectionEl.style.display = 'block';
-    const scopeMode = state.scope.mode === 'range' ? 'Selection (locked outside)' : 'Full document';
+    const locked = Boolean(state.scope.locked);
+    const scopeMode = !locked
+      ? 'Unlocked'
+      : state.scope.mode === 'range'
+        ? 'Selection (locked)'
+        : 'Full document (locked)';
     scopeStatusEl.textContent = 'Scope: ' + scopeMode;
-    scopeSelectionBtn.disabled = !state.hasEditor;
-    scopeFullBtn.disabled = !state.hasEditor || state.scope.mode !== 'range';
+    const active = locked ? (state.scope.mode === 'range' ? 'selection' : 'full') : 'unlock';
+    const setActive = (button, isActive) => {
+      if (!button) {
+        return;
+      }
+      button.classList.toggle('secondary', !isActive);
+      button.setAttribute('aria-pressed', String(isActive));
+    };
+    setActive(scopeUnlockBtn, active === 'unlock');
+    setActive(scopeSelectionBtn, active === 'selection');
+    setActive(scopeFullBtn, active === 'full');
+    const disabled = !state.hasEditor;
+    if (scopeUnlockBtn) {
+      scopeUnlockBtn.disabled = disabled;
+    }
+    scopeSelectionBtn.disabled = disabled;
+    scopeFullBtn.disabled = disabled;
+    overallAddBtn.disabled = disabled || !locked;
   } else {
     scopeSectionEl.style.display = 'none';
   }
@@ -366,6 +388,12 @@ scopeSelectionBtn.addEventListener('click', () => {
 scopeFullBtn.addEventListener('click', () => {
   vscode.postMessage({ type: 'setScopeFull' });
 });
+
+if (scopeUnlockBtn) {
+  scopeUnlockBtn.addEventListener('click', () => {
+    vscode.postMessage({ type: 'setScopeUnlock' });
+  });
+}
 
 llmOpenBtn.addEventListener('click', () => {
   vscode.postMessage({ type: 'runLlm' });

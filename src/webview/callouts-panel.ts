@@ -203,8 +203,9 @@ export function getCalloutsPanelHtml(options: CalloutsPanelOptions): string {
         <div class="section-body">
           <div id="scope-status" class="meta"></div>
           <div class="section-actions">
+            <button id="scope-unlock" class="secondary" type="button">Unlock</button>
             <button id="scope-selection" class="secondary" type="button">Use Selection</button>
-            <button id="scope-full" type="button">Full Document</button>
+            <button id="scope-full" class="secondary" type="button">Full Document</button>
           </div>
         </div>
       </details>

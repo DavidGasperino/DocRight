@@ -320,9 +320,13 @@ export function activate(context: vscode.ExtensionContext): RefactorApi {
     let html = '';
     if (editorHost && editorHost.isOpenForRoot(root)) {
       try {
-        html = await editorHost.requestHtmlExport();
+        html = await editorHost.requestHtmlExport({ useActiveScope: true });
       } catch (error) {
         logger.debug('Failed to export editor HTML for LLM prompt', error);
+        void vscode.window.showErrorMessage(
+          error instanceof Error ? error.message : 'Failed to export the document for prompt generation.'
+        );
+        return;
       }
     }
 

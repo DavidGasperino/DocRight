@@ -30,7 +30,7 @@ export type CalloutsStateMessage = {
   inlineCallouts: CalloutsCalloutView[];
   selectedOverallId: string | null;
   selectedInlineId: string | null;
-  scope: { supported: boolean; mode?: 'full' | 'range' };
+  scope: { supported: boolean; mode?: 'full' | 'range'; locked?: boolean };
   llm: { supported: boolean; status: string; isRunning: boolean; canApply: boolean };
   iterations: CalloutsIterationView[];
 };
@@ -59,6 +59,7 @@ export type CalloutsFromWebviewMessage =
   | { type: 'toggleContextActive'; id: string; active: boolean }
   | { type: 'setScopeSelection' }
   | { type: 'setScopeFull' }
+  | { type: 'setScopeUnlock' }
   | { type: 'runLlm' }
   | { type: 'saveIteration' }
   | { type: 'openTimeline' }
@@ -81,6 +82,7 @@ const calloutsMessageTypes = new Set<CalloutsFromWebviewMessage['type']>([
   'toggleContextActive',
   'setScopeSelection',
   'setScopeFull',
+  'setScopeUnlock',
   'runLlm',
   'saveIteration',
   'openTimeline',

@@ -128,6 +128,84 @@ function updateResponseEmptyState() {
   responsePreviewEl.classList.toggle('is-empty', isEmpty);
 }
 
+function stripSummaryBlock(value) {
+  return String(value || '').replace(/<!--DOCRIGHT_SUMMARY_START-->[\s\S]*?<!--DOCRIGHT_SUMMARY_END-->/gi, '');
+}
+
+function decodeHtmlIfEscaped(value) {
+  const text = String(value || '');
+  if (!text.includes('&lt;') && !text.includes('&gt;')) {
+    return text;
+  }
+  const textarea = document.createElement('textarea');
+  textarea.innerHTML = text;
+  return textarea.value;
+}
+
+function stripCdata(value) {
+  const text = String(value || '').trim();
+  const match = text.match(/<!\[CDATA\[([\s\S]*?)\]\]>/i);
+  if (!match) {
+    return text;
+  }
+  return String(match[1] || '').trim();
+}
+
+function ensureBlockHtml(value) {
+  const text = String(value || '').trim();
+  if (!text) {
+    return text;
+  }
+  const parser = new DOMParser();
+  const doc = parser.parseFromString(text, 'text/html');
+  const hasBlock = Boolean(
+    doc.body.querySelector('p, h1, h2, h3, h4, h5, h6, ul, ol, table, blockquote, pre, div')
+  );
+  if (hasBlock) {
+    return text;
+  }
+  const inner = doc.body.innerHTML.trim();
+  if (!inner) {
+    return text;
+  }
+  return `<p>${inner}</p>`;
+}
+
+function stripTags(value) {
+  return String(value || '').replace(/<[^>]+>/g, '').trim();
+}
+
+function extractHtmlFragment(raw) {
+  let cleaned = stripSummaryBlock(raw);
+  const bodyMatch = String(cleaned).match(/<llm-body[^>]*>([\s\S]*?)<\/llm-body>/i);
+  if (bodyMatch) {
+    cleaned = bodyMatch[1];
+  }
+  cleaned = stripCdata(cleaned);
+  cleaned = decodeHtmlIfEscaped(cleaned);
+  cleaned = ensureBlockHtml(cleaned);
+  return String(cleaned || '').trim();
+}
+
+function unwrapDocRightMarkers(doc) {
+  doc.querySelectorAll('llm-edit').forEach((node) => {
+    const fragment = doc.createDocumentFragment();
+    while (node.firstChild) {
+      fragment.appendChild(node.firstChild);
+    }
+    node.replaceWith(fragment);
+  });
+  doc.querySelectorAll('instruction').forEach((node) => node.remove());
+}
+
+function parseResponseHtml(raw) {
+  const cleaned = extractHtmlFragment(raw);
+  const parser = new DOMParser();
+  const doc = parser.parseFromString(cleaned, 'text/html');
+  unwrapDocRightMarkers(doc);
+  return { cleaned, doc };
+}
+
 function renderResponsePreview(value) {
   if (!responseEditor || !responsePreviewEl) {
     return;
@@ -135,25 +213,40 @@ function renderResponsePreview(value) {
   responseEditor.update(() => {
     const root = $getRoot();
     root.clear();
-    const raw = String(value || '').trim();
-    if (!raw) {
+    const raw = String(value || '');
+    const { cleaned, doc } = parseResponseHtml(raw);
+    let parsedDoc = doc;
+    if (!cleaned) {
       root.append($createParagraphNode());
       return;
     }
     try {
-      const parser = new DOMParser();
-      const doc = parser.parseFromString(raw, 'text/html');
-      const nodes = $generateNodesFromDOM(responseEditor, doc);
+      let nodes = $generateNodesFromDOM(responseEditor, parsedDoc);
+      if (nodes.length === 0) {
+        const hasBlock = Boolean(
+          parsedDoc.body.querySelector(
+            'p, h1, h2, h3, h4, h5, h6, ul, ol, table, blockquote, pre'
+          )
+        );
+        if (!hasBlock && cleaned.includes('<')) {
+          const parser = new DOMParser();
+          parsedDoc = parser.parseFromString(`<p>${cleaned}</p>`, 'text/html');
+          nodes = $generateNodesFromDOM(responseEditor, parsedDoc);
+        }
+      }
       if (nodes.length === 0) {
         const paragraph = $createParagraphNode();
-        paragraph.append($createTextNode(raw));
+        const text = (parsedDoc.body && parsedDoc.body.textContent ? parsedDoc.body.textContent : '').trim();
+        const fallback = text || stripTags(cleaned);
+        paragraph.append($createTextNode(fallback || ''));
         root.append(paragraph);
       } else {
         root.append(...nodes);
       }
     } catch (error) {
       const paragraph = $createParagraphNode();
-      paragraph.append($createTextNode(raw));
+      const fallback = stripTags(raw);
+      paragraph.append($createTextNode((fallback || String(raw || '')).trim()));
       root.append(paragraph);
     }
   });

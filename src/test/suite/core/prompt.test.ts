@@ -4,7 +4,7 @@ import { buildDocRightPrompt, renderIterationPreamble } from '../../../core/prom
 import { type DocRightScopeState } from '../../../core/scope';
 
 suite('prompt', () => {
-  const fullScope: DocRightScopeState = { mode: 'full', selection: null };
+  const fullScope: DocRightScopeState = { mode: 'full', selection: null, locked: true, markerId: null };
   const rangeScope: DocRightScopeState = {
     mode: 'range',
     selection: {
@@ -15,7 +15,9 @@ suite('prompt', () => {
       focusOffset: 10,
       focusType: 'text',
       isBackward: false
-    }
+    },
+    locked: true,
+    markerId: 'marker-1'
   };
 
   test('renderIterationPreamble replaces scope tokens', () => {

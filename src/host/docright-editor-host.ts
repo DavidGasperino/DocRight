@@ -21,10 +21,17 @@ import {
   isDocRightFromWebviewMessage
 } from '../webview/docright-editor-messages';
 import { type Logger } from './logger';
+import { appendDiagnosticsLog } from './ui-diagnostics';
 
 type PendingRequest<T> = {
   resolve: (value: T) => void;
   reject: (error: Error) => void;
+};
+
+type ReadyWaiter = {
+  resolve: () => void;
+  reject: (error: Error) => void;
+  timer: NodeJS.Timeout;
 };
 
 export class DocRightEditorHost {
@@ -48,7 +55,9 @@ export class DocRightEditorHost {
   private nextInlineId = 1;
   private nextOverallId = 1;
   private editorActive = false;
+  private lastSelectionPayload: DocRightSelectionPayload | null = null;
   private calloutsChangedHandler: (() => void) | null = null;
+  private readyWaiters: ReadyWaiter[] = [];
 
   constructor(extensionUri: vscode.Uri, settings: DocRightSettings, logger: Logger) {
     this.extensionUri = extensionUri;
@@ -181,6 +190,13 @@ export class DocRightEditorHost {
     if (!this.root) {
       return;
     }
+    if (!this.scopeState) {
+      this.scopeState = await loadDocRightScope(this.root);
+    }
+    if (this.scopeState.locked === false) {
+      void vscode.window.showInformationMessage('Lock scope to add callouts.');
+      return;
+    }
     const instruction = await vscode.window.showInputBox({
       title: 'Overall Callout',
       prompt: 'Describe the overall change for this document',
@@ -282,6 +298,7 @@ export class DocRightEditorHost {
       this.calloutsState = null;
       this.contextsState = null;
       this.scopeState = null;
+      this.rejectReadyWaiters('DocRight editor is not open.');
     });
 
     const scriptUri = this.panel.webview.asWebviewUri(
@@ -298,7 +315,20 @@ export class DocRightEditorHost {
       void vscode.window.showInformationMessage('Open the DocRight editor to set scope.');
       return;
     }
-    this.postMessage({ type: 'docright.requestScopeSelection' });
+    await this.awaitWebviewReady();
+    const selection = this.lastSelectionPayload;
+    const canUseSelection =
+      selection && !selection.isCollapsed && selection.text && selection.text.trim().length > 0;
+    this.postMessage({
+      type: 'docright.requestScopeSelection',
+      selection: canUseSelection ? selection : null
+    });
+    if (this.root) {
+      void appendDiagnosticsLog(this.root, 'docright.scope.requested', {
+        hasSelection: Boolean(canUseSelection),
+        selectionLength: selection?.text ? selection.text.length : 0
+      });
+    }
   }
 
   async setScopeToFull(): Promise<void> {
@@ -311,36 +341,58 @@ export class DocRightEditorHost {
     }
     this.scopeState.mode = 'full';
     this.scopeState.selection = null;
+    this.scopeState.locked = true;
+    this.scopeState.markerId = null;
     await saveDocRightScope(this.root, this.scopeState);
     this.postDocRightScope();
   }
 
-  async requestHtmlExport(): Promise<string> {
+  async setScopeUnlock(): Promise<void> {
+    if (!this.root) {
+      void vscode.window.showInformationMessage('No DocRight project is open.');
+      return;
+    }
+    if (!this.scopeState) {
+      this.scopeState = await loadDocRightScope(this.root);
+    }
+    this.scopeState.locked = false;
+    this.scopeState.markerId = null;
+    await saveDocRightScope(this.root, this.scopeState);
+    this.postDocRightScope();
+  }
+
+  async requestHtmlExport(options?: {
+    scope?: DocRightScopeState | null;
+    useActiveScope?: boolean;
+  }): Promise<string> {
     if (!this.panel) {
       throw new Error('DocRight editor is not open.');
     }
-    if (!this.webviewReady) {
-      throw new Error('DocRight editor is not ready yet.');
-    }
+    await this.awaitWebviewReady();
     const inlineCallouts = this.getInlineCalloutPayloads();
     const requestId = this.exportCounter++;
+    const scope = options?.scope ?? null;
+    const useActiveScope = options?.useActiveScope ?? false;
     return new Promise<string>((resolve, reject) => {
       this.exportRequests.set(requestId, { resolve, reject });
-      this.postMessage({ type: 'docright.export', requestId, inlineCallouts });
+      this.postMessage({ type: 'docright.export', requestId, inlineCallouts, scope, useActiveScope });
     });
   }
 
-  async applyScopeUpdate(html: string, scope: DocRightScopeState | null): Promise<void> {
+  async applyScopeUpdate(
+    html: string,
+    options?: { scope?: DocRightScopeState | null; useActiveScope?: boolean }
+  ): Promise<void> {
     if (!this.panel) {
       throw new Error('DocRight editor is not open.');
     }
-    if (!this.webviewReady) {
-      throw new Error('DocRight editor is not ready yet.');
-    }
+    await this.awaitWebviewReady();
     const requestId = this.applyCounter++;
+    const scope = options?.scope ?? null;
+    const useActiveScope = options?.useActiveScope ?? false;
     return new Promise<void>((resolve, reject) => {
       this.applyRequests.set(requestId, { resolve, reject });
-      this.postMessage({ type: 'docright.applyScopeUpdate', requestId, scope, html });
+      this.postMessage({ type: 'docright.applyScopeUpdate', requestId, scope, useActiveScope, html });
     });
   }
 
@@ -431,6 +483,7 @@ export class DocRightEditorHost {
     switch (message.type) {
       case 'docright.ready':
         this.webviewReady = true;
+        this.resolveReadyWaiters();
         if (this.pendingLoad) {
           this.pendingLoad = false;
           await this.postDocRightState();
@@ -453,19 +506,87 @@ export class DocRightEditorHost {
         await this.handleOverallCalloutRequest(message.selection);
         break;
       case 'docright.scopeSelection':
-        await this.applyScopeSelection(message.selection);
+        await this.applyScopeSelection(message.selection, message.markerId ?? null);
+        if (this.root) {
+          void appendDiagnosticsLog(this.root, 'docright.scopeSelection', {
+            markerId: message.markerId ?? null,
+            selectionLength: message.selection?.text ? message.selection.text.length : 0,
+            selectionPreview: message.selection?.text ? message.selection.text.slice(0, 120) : null
+          });
+        }
         break;
       case 'docright.scopeInvalid':
-        await this.setScopeToFull();
+        await this.setScopeUnlock();
         break;
       case 'docright.selection':
         this.handleSelectionChange(message.id);
+        break;
+      case 'docright.selectionPayload':
+        this.lastSelectionPayload = message.selection ?? null;
+        if (this.root) {
+          void appendDiagnosticsLog(this.root, 'docright.selectionPayload', {
+            selectionLength: message.selection?.text ? message.selection.text.length : 0,
+            selectionPreview: message.selection?.text ? message.selection.text.slice(0, 120) : null
+          });
+        }
         break;
       case 'docright.applyScopeComplete': {
         const entry = this.applyRequests.get(message.requestId);
         if (entry) {
           this.applyRequests.delete(message.requestId);
           entry.resolve(undefined);
+        }
+        if (this.root) {
+          void appendDiagnosticsLog(this.root, 'docright.apply.complete', {
+            requestId: message.requestId,
+            resolution: message.resolution ?? null,
+            scope: this.scopeState
+              ? {
+                  mode: this.scopeState.mode,
+                  locked: this.scopeState.locked,
+                  markerId: this.scopeState.markerId ?? null
+                }
+              : null
+          });
+        }
+        break;
+      }
+      case 'docright.applyScopeError': {
+        const entry = this.applyRequests.get(message.requestId);
+        if (entry) {
+          this.applyRequests.delete(message.requestId);
+          entry.reject(new Error(message.message || 'Failed to apply scoped update.'));
+        }
+        if (this.root) {
+          void appendDiagnosticsLog(this.root, 'docright.apply.error', {
+            requestId: message.requestId,
+            message: message.message || null,
+            scope: this.scopeState
+              ? {
+                  mode: this.scopeState.mode,
+                  locked: this.scopeState.locked,
+                  markerId: this.scopeState.markerId ?? null
+                }
+              : null
+          });
+        }
+        break;
+      }
+      case 'docright.applyTrace': {
+        if (this.root) {
+          void appendDiagnosticsLog(this.root, 'docright.apply.trace', {
+            stage: message.stage,
+            ...message.detail
+          });
+        }
+        break;
+      }
+      case 'docright.scopeTrace': {
+        if (this.root) {
+          void appendDiagnosticsLog(this.root, 'docright.scope.trace', {
+            stage: message.stage,
+            ...message.detail
+          });
         }
         break;
       }
@@ -505,7 +626,7 @@ export class DocRightEditorHost {
     }
   }
 
-  private async applyScopeSelection(selection: DocRightSelectionPayload): Promise<void> {
+  private async applyScopeSelection(selection: DocRightSelectionPayload, markerId: string | null): Promise<void> {
     if (!this.root) {
       void vscode.window.showInformationMessage('No DocRight project is open.');
       return;
@@ -519,6 +640,10 @@ export class DocRightEditorHost {
       this.scopeState = await loadDocRightScope(this.root);
     }
 
+    const existingMarkerId = this.scopeState.markerId;
+    const keepMarkerId =
+      !markerId && existingMarkerId && this.scopeState.locked && this.scopeState.mode === 'range';
+
     this.scopeState.mode = 'range';
     this.scopeState.selection = {
       anchorKey: selection.anchorKey,
@@ -529,9 +654,45 @@ export class DocRightEditorHost {
       focusType: selection.focusType || 'text',
       isBackward: Boolean(selection.isBackward)
     };
+    this.scopeState.locked = true;
+    this.scopeState.markerId = keepMarkerId ? existingMarkerId : markerId;
 
     await saveDocRightScope(this.root, this.scopeState);
     this.postDocRightScope();
+  }
+
+  private async awaitWebviewReady(): Promise<void> {
+    if (this.webviewReady) {
+      return;
+    }
+    return new Promise<void>((resolve, reject) => {
+      const timer = setTimeout(() => {
+        reject(new Error('DocRight editor is not ready yet.'));
+      }, 5000);
+      this.readyWaiters.push({ resolve, reject, timer });
+    });
+  }
+
+  private resolveReadyWaiters(): void {
+    if (this.readyWaiters.length === 0) {
+      return;
+    }
+    const waiters = this.readyWaiters.splice(0, this.readyWaiters.length);
+    waiters.forEach((waiter) => {
+      clearTimeout(waiter.timer);
+      waiter.resolve();
+    });
+  }
+
+  private rejectReadyWaiters(message: string): void {
+    if (this.readyWaiters.length === 0) {
+      return;
+    }
+    const waiters = this.readyWaiters.splice(0, this.readyWaiters.length);
+    waiters.forEach((waiter) => {
+      clearTimeout(waiter.timer);
+      waiter.reject(new Error(message));
+    });
   }
 
   private handleSelectionChange(calloutId: string | null): void {
@@ -553,6 +714,13 @@ export class DocRightEditorHost {
     }
     if (!selection || !selection.text || !selection.text.trim()) {
       void vscode.window.showInformationMessage('Select text in DocRight to attach an inline callout.');
+      return;
+    }
+    if (!this.scopeState) {
+      this.scopeState = await loadDocRightScope(this.root);
+    }
+    if (this.scopeState.locked === false) {
+      void vscode.window.showInformationMessage('Lock scope to add callouts.');
       return;
     }
     if (this.scopeState?.mode === 'range' && selection.inScope === false) {
@@ -596,6 +764,17 @@ export class DocRightEditorHost {
   }
 
   private async handleOverallCalloutRequest(selection: DocRightSelectionPayload): Promise<void> {
+    if (!this.root) {
+      void vscode.window.showInformationMessage('No DocRight project is open.');
+      return;
+    }
+    if (!this.scopeState) {
+      this.scopeState = await loadDocRightScope(this.root);
+    }
+    if (this.scopeState.locked === false) {
+      void vscode.window.showInformationMessage('Lock scope to add callouts.');
+      return;
+    }
     if (this.scopeState?.mode === 'range' && selection && selection.inScope === false) {
       void vscode.window.showInformationMessage('Overall callouts must be inside the active scope.');
       return;
@@ -613,9 +792,6 @@ export class DocRightEditorHost {
       return;
     }
 
-    if (!this.root) {
-      return;
-    }
     if (!this.calloutsState) {
       this.calloutsState = await loadDocRightCallouts(this.root);
     }
